@@ -18,6 +18,7 @@ import {
   type BrowserTab,
   type BrowserTabLabelField,
   isWebUrl,
+  NAVIGATION_ABORTED,
   type OpenTabOptions,
 } from './browser-service';
 import {
@@ -229,13 +230,22 @@ function waitForLoad(tab: BrowserTab, ms: number): Promise<void> {
 const UNLOAD_BLOCKED =
   'The page did not navigate: its beforeunload handler blocked leaving (an unsaved-changes guard). Dismiss the unsaved state, or pass force: true.';
 
-/** Watches for the main frame committing a new document, or a same-document navigation when `sameDocument` allows it. */
-function watchCommit(
+/**
+ * Watches the main frame for a committed new document (or a same-document
+ * navigation when `sameDocument` allows it) and for a failed load, read here
+ * because the error page's `did-finish-load` clears `tab.error` again.
+ */
+function watchNavigation(
   tab: BrowserTab,
   sameDocument: boolean,
-): { committed: () => boolean; stop: () => void } {
+): {
+  committed: () => boolean;
+  failure: () => string | null;
+  stop: () => void;
+} {
   const contents = tab.view.webContents;
   let committed = false;
+  let failure: string | null = null;
   const onNavigate = (): void => {
     committed = true;
   };
@@ -248,13 +258,27 @@ function watchCommit(
       committed = true;
     }
   };
+  const onFail = (
+    _event: unknown,
+    code: number,
+    description: string,
+    _url: string,
+    isMainFrame: boolean,
+  ): void => {
+    if (isMainFrame && code !== NAVIGATION_ABORTED) {
+      failure = description;
+    }
+  };
   contents.on('did-navigate', onNavigate);
   contents.on('did-navigate-in-page', onInPage);
+  contents.on('did-fail-load', onFail);
   return {
     committed: () => committed,
+    failure: () => failure,
     stop: () => {
       contents.removeListener('did-navigate', onNavigate);
       contents.removeListener('did-navigate-in-page', onInPage);
+      contents.removeListener('did-fail-load', onFail);
     },
   };
 }
@@ -265,9 +289,10 @@ async function navigateTab(
   force: boolean,
 ): Promise<Done> {
   const contents = ctx.tab.view.webContents;
-  const reload = contents.getURL() === url;
+  const before = contents.getURL();
+  const reload = before === url;
   ctx.op.leavesGuardedPage = force;
-  const commit = watchCommit(ctx.tab, !reload);
+  const commit = watchNavigation(ctx.tab, !reload);
   const deadline = Date.now() + LOAD_WAIT_MS;
   try {
     const loaded = waitForLoad(ctx.tab, LOAD_WAIT_MS);
@@ -279,6 +304,7 @@ async function navigateTab(
     await loaded;
     while (
       !commit.committed() &&
+      commit.failure() === null &&
       !ctx.op.unloadBlocked &&
       contents.isLoading() &&
       Date.now() < deadline
@@ -289,18 +315,26 @@ async function navigateTab(
     commit.stop();
   }
   checkOp(ctx.op);
-  if (ctx.tab.error !== null) {
-    throw new AgentError(`Could not load ${url}: ${ctx.tab.error.description}`);
+  const failure = commit.failure() ?? ctx.tab.error?.description ?? null;
+  if (failure !== null) {
+    throw new AgentError(`Could not load ${url}: ${failure}`);
   }
   if (!commit.committed()) {
     if (ctx.op.unloadBlocked) {
       throw new AgentError(UNLOAD_BLOCKED);
     }
-    const loading = contents.isLoading()
-      ? ' while the new page is still loading'
-      : '';
+    if (contents.isLoading()) {
+      throw new AgentError(
+        `The page did not load in time: tab ${ctx.tab.id} is still loading ${url}.`,
+      );
+    }
+    if (contents.getURL() !== before) {
+      throw new AgentError(
+        `Could not load ${url}: the tab shows an error page instead.`,
+      );
+    }
     throw new AgentError(
-      `The page did not navigate: tab ${ctx.tab.id} still shows ${contents.getURL()}${loading}.`,
+      `The page did not navigate: tab ${ctx.tab.id} still shows ${before}.`,
     );
   }
   const shown = contents.getURL() || url;

@@ -92,6 +92,9 @@ interface ChatBrowser {
   userHosts: Set<string>;
 }
 
+/** Chromium's ERR_ABORTED: a navigation cancelled before it committed, by a new one or a beforeunload guard. */
+export const NAVIGATION_ABORTED = -3;
+
 export interface BrowserServiceOptions {
   proxyPort: number;
   /** Resolves once the launch sweep of orphaned jars is done; no session is made before. */
@@ -941,7 +944,7 @@ export class BrowserService {
         url: string,
         isMainFrame: boolean,
       ) => {
-        if (!isMainFrame || code === -3) {
+        if (!isMainFrame || code === NAVIGATION_ABORTED) {
           return;
         }
         tab.error = {

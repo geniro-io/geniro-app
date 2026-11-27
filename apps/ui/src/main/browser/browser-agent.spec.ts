@@ -1171,6 +1171,110 @@ describe('runBrowserAgentRequest navigate', () => {
     expect(reply).toEqual({ id: 'q1', ok: false, error: GUARDED });
   });
 
+  it('answers a load that failed with its cause, as Electron reports it before the error page finishes', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.emit('did-start-loading');
+        contents.emit(
+          'did-fail-load',
+          {},
+          -102,
+          'ERR_CONNECTION_REFUSED',
+          'http://127.0.0.1:1/x',
+          true,
+        );
+        contents.getURL = () => 'http://127.0.0.1:1/x';
+        contents.emit('did-finish-load');
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'http://127.0.0.1:1/x' }),
+    );
+
+    expect(reply).toEqual({
+      id: 'q1',
+      ok: false,
+      error: 'Could not load http://127.0.0.1:1/x: ERR_CONNECTION_REFUSED',
+    });
+  });
+
+  it('answers a reload that failed with its cause', async () => {
+    const { host, reload, contents } = rig();
+    reload.mockImplementation(() => {
+      setTimeout(() => {
+        contents.emit(
+          'did-fail-load',
+          {},
+          -102,
+          'ERR_CONNECTION_REFUSED',
+          'https://good.test/',
+          true,
+        );
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/' }),
+    );
+
+    expect(reply).toMatchObject({
+      ok: false,
+      error: 'Could not load https://good.test/: ERR_CONNECTION_REFUSED',
+    });
+  });
+
+  it('never says the old page stayed once the tab has left it', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.getURL = () => 'http://127.0.0.1:1/x';
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'http://127.0.0.1:1/x' }),
+    );
+
+    expect(reply).toEqual({
+      id: 'q1',
+      ok: false,
+      error:
+        'Could not load http://127.0.0.1:1/x: the tab shows an error page instead.',
+    });
+  });
+
+  it('ignores a frame that failed to load inside a page that committed', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.emit(
+          'did-fail-load',
+          {},
+          -105,
+          'ERR_NAME_NOT_RESOLVED',
+          'https://ads.test/',
+          false,
+        );
+        commits(contents, 'https://good.test/next');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }),
+    );
+
+    expect(reply).toMatchObject({ ok: true });
+  });
+
   it('takes an address written without its trailing slash for the one the tab shows', async () => {
     const { host, loadUrl, reload, contents } = rig();
     reload.mockImplementation(() => {
@@ -1212,7 +1316,7 @@ describe('runBrowserAgentRequest navigate', () => {
     });
   });
 
-  it('says the new page is still loading when nothing committed in time', async () => {
+  it('says the new page did not load in time when nothing committed', async () => {
     vi.useFakeTimers();
     try {
       const { host, loadUrl, contents } = rig();
@@ -1229,7 +1333,7 @@ describe('runBrowserAgentRequest navigate', () => {
         id: 'q1',
         ok: false,
         error:
-          'The page did not navigate: tab t1 still shows https://good.test/ while the new page is still loading.',
+          'The page did not load in time: tab t1 is still loading https://good.test/next.',
       });
     } finally {
       vi.useRealTimers();

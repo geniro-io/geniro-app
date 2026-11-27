@@ -84,6 +84,7 @@ import { useLatestCallback } from '../components/use-latest-callback';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { usePhoneBackEntry } from '../components/use-phone-back-entry';
 import { useSettledValue } from '../components/use-settled-value';
+import { useTouchDevice } from '../components/use-touch-device';
 import {
   createDaemonApis,
   daemonErrorCode,
@@ -5241,8 +5242,9 @@ export function Chats({
    * live copy, because two sets of buttons over one one-shot verdict channel is
    * a race the card cannot win.
    *
-   * The exception is a short chat column (`questionPlacements`): there the
-   * pinned card would leave the conversation a strip it cannot scroll, so a
+   * The exception is a short chat column on a touch device
+   * (`questionPlacements`): there the pinned card would leave the conversation
+   * a strip a finger cannot scroll, so a
    * question whose row is drawn keeps its live card at that row instead, and
    * only that one copy exists.
    *
@@ -6953,6 +6955,7 @@ export function Chats({
     drawnEntriesRef.current = transcriptEntries;
   }, [transcriptEntries]);
   const [measureChatColumn, chatColumn] = useElementSize<HTMLElement>();
+  const touchDevice = useTouchDevice();
   const chatColumnHeight = useSettledValue(
     chatColumn.height,
     COLUMN_SETTLE_MS,
@@ -6973,10 +6976,17 @@ export function Chats({
       openRequests.map((request) => request.id),
       threadOpening ? null : drawn,
       chatColumnHeight,
+      touchDevice,
     );
     questionPlacementsRef.current = placed;
     return placed;
-  }, [openRequests, transcriptEntries, threadOpening, chatColumnHeight]);
+  }, [
+    openRequests,
+    transcriptEntries,
+    threadOpening,
+    chatColumnHeight,
+    touchDevice,
+  ]);
   const pinnedRequests = useMemo(
     () =>
       openRequests.filter(

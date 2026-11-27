@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { ErrorText } from '../components/error-text';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
+import { useTouchDevice } from '../components/use-touch-device';
 import { ArtifactDialog } from './artifact-dialog';
 import { ArtifactFrame } from './artifact-frame';
 import { ArtifactSaveButton, useArtifactSaver } from './artifact-save';
@@ -52,6 +53,7 @@ export function ArtifactCard({
   // ONE saver for both controls — the heading's and the dialog's are the same
   // act on the same document, so they share a busy flag and a failure line.
   const saver = useArtifactSaver();
+  const touchDevice = useTouchDevice();
   // The reader's own press outranks the derived default — `TaskListCard`'s
   // shape, and the same reason: a card that opened itself but could not be
   // shut would be worse than one that never opened.
@@ -162,7 +164,22 @@ export function ArtifactCard({
            what is underneath is a document the agent wrote and this app has no
            say in what it draws in that corner. */
         <div className="relative">
-          <ArtifactFrame artifact={artifact} />
+          <ArtifactFrame
+            artifact={artifact}
+            clipped={touchDevice}
+            clippedAction={
+              labelledFullScreen ? null : (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setFull(true)}>
+                  <Maximize2 aria-hidden="true" className="size-3" />
+                  Open full screen
+                </Button>
+              )
+            }
+          />
           <span className="absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5">
             {controls}
           </span>

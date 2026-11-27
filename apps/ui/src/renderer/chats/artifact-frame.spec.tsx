@@ -13,7 +13,9 @@ import {
   ANSWERS_RETRY_MS,
   ANSWERS_SAVE_DELAY_MS,
   ArtifactFrame,
+  CLIPPED_FRAME_MAX_HEIGHT,
   MAX_ANSWER_NAME,
+  MAX_INLINE_HEIGHT,
 } from './artifact-frame';
 import {
   BrowserPaneContext,
@@ -76,6 +78,70 @@ async function render(
 }
 
 const frame = (): HTMLIFrameElement | null => container.querySelector('iframe');
+
+async function reportHeight(height: number): Promise<void> {
+  const target = frame();
+  await act(async () => {
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { source: 'geniro-artifact', type: 'height', height },
+        source: target!.contentWindow,
+      }),
+    );
+  });
+}
+
+describe('ArtifactFrame — clipped, for a touch screen', () => {
+  async function renderClipped(): Promise<void> {
+    await act(async () => {
+      root.render(
+        <ArtifactUrlContext.Provider value={() => URL}>
+          <ArtifactFrame
+            artifact={ARTIFACT}
+            clipped
+            clippedAction={<button type="button">Open full screen</button>}
+          />
+        </ArtifactUrlContext.Provider>,
+      );
+    });
+  }
+  const clip = (): HTMLElement | null =>
+    container.querySelector('[data-slot="artifact-frame-clip"]');
+  const action = (): HTMLButtonElement | undefined =>
+    [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Open full screen',
+    );
+
+  it('is as tall as a long page, so the page has nothing of its own to scroll, and cuts it at the inline height under a fade', async () => {
+    await renderClipped();
+    await reportHeight(2400);
+
+    expect(frame()?.style.height).toBe('2400px');
+    const cut = frame()?.parentElement;
+    expect(cut?.style.maxHeight).toBe(`${MAX_INLINE_HEIGHT}px`);
+    expect(cut?.className).toContain('overflow-clip');
+    expect(cut?.className).toContain('mask-b-from-70%');
+    expect(clip()?.getAttribute('data-cut-off')).toBe('true');
+    expect(action()).toBeDefined();
+  });
+
+  it('shows a short page whole, with no fade and no action', async () => {
+    await renderClipped();
+    await reportHeight(300);
+
+    expect(frame()?.style.height).toBe('300px');
+    expect(frame()?.parentElement?.className).not.toContain('mask-b-from');
+    expect(clip()?.getAttribute('data-cut-off')).toBe('false');
+    expect(action()).toBeUndefined();
+  });
+
+  it('stops a page that grows with its frame at its own bound', async () => {
+    await renderClipped();
+    await reportHeight(99_000);
+
+    expect(frame()?.style.height).toBe(`${CLIPPED_FRAME_MAX_HEIGHT}px`);
+  });
+});
 
 describe('ArtifactFrame', () => {
   it('frames the page the url builder names', async () => {

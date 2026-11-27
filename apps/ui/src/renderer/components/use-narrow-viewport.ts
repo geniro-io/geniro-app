@@ -1,23 +1,4 @@
-import { useEffect, useState } from 'react';
-
-/**
- * `window.matchMedia` itself, guarded rather than called bare.
- *
- * Every real runtime this app ships to has it (Electron's renderer, any
- * phone browser reaching the LAN gateway); jsdom does not, and this
- * component's OWN unit spec is the only caller that stubs it in — every
- * other spec that happens to mount `Chats` (or anything else on this hook)
- * has no reason to know this hook exists, so the guard belongs here rather
- * than forcing a `vi.stubGlobal('matchMedia', …)` onto specs that are
- * testing something else entirely. `false` (i.e. "not narrow") is the safe
- * default in that case: it is what every existing desktop-focused spec
- * already assumed before this hook existed.
- */
-function matches(query: string): boolean {
-  return (
-    typeof window.matchMedia === 'function' && window.matchMedia(query).matches
-  );
-}
+import { useMediaQuery } from './use-media-query';
 
 /**
  * Whether the window is narrower than `maxWidthPx` right now — the renderer's
@@ -36,22 +17,5 @@ function matches(query: string): boolean {
  * override it).
  */
 export function useNarrowViewport(maxWidthPx = 639): boolean {
-  const query = `(max-width: ${maxWidthPx}px)`;
-  const [narrow, setNarrow] = useState(() => matches(query));
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') {
-      return;
-    }
-    const mql = window.matchMedia(query);
-    const onChange = (): void => setNarrow(mql.matches);
-    // The query STRING can change between renders (a caller passing a
-    // different `maxWidthPx`), so re-read the current match on every effect
-    // run rather than trusting the state from a possibly-stale query.
-    onChange();
-    mql.addEventListener('change', onChange);
-    return () => mql.removeEventListener('change', onChange);
-  }, [query]);
-
-  return narrow;
+  return useMediaQuery(`(max-width: ${maxWidthPx}px)`);
 }

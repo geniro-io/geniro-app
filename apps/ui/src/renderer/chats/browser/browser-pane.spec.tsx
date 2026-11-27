@@ -70,6 +70,14 @@ function showState(state: BrowserRunState): void {
   window.geniro = createPreloadStub(overrides);
 }
 
+function emit(event: BrowserStateEvent): void {
+  act(() => {
+    for (const listener of listeners) {
+      listener(event);
+    }
+  });
+}
+
 beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -252,6 +260,31 @@ describe('BrowserPane', () => {
     expect(
       container.querySelector('[data-slot="browser-driving-banner"]'),
     ).toBeNull();
+  });
+
+  it('keeps the page area where it is while an agent drives the tab', async () => {
+    const rowsOfPane = (): string[] =>
+      [...container.querySelector('[data-slot="browser-pane"]')!.children].map(
+        (row) =>
+          row.getAttribute('data-slot') ??
+          row.getAttribute('role') ??
+          row.tagName,
+      );
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+    const idleRows = rowsOfPane();
+
+    emit({
+      state: run([tab({ drivenBy: 'Engineer' })]),
+      agentOpenedTabId: null,
+      dockedBack: false,
+    });
+
+    expect(rowsOfPane()).toEqual(idleRows);
+    const banner = container.querySelector(
+      '[data-slot="browser-driving-banner"]',
+    );
+    expect(banner).not.toBeNull();
+    expect(button('Back').parentElement?.contains(banner)).toBe(true);
   });
 
   it('offers Continue anyway on a certificate error, and hides the view for it', async () => {
@@ -542,14 +575,6 @@ describe('BrowserPane', () => {
 });
 
 describe('the chat grid and the pane it hosts', () => {
-  function emit(event: BrowserStateEvent): void {
-    act(() => {
-      for (const listener of listeners) {
-        listener(event);
-      }
-    });
-  }
-
   const grid = (): React.ReactElement => (
     <ThreadUiMemoryContext.Provider value={RUN}>
       <BrowserGrid runId={RUN}>

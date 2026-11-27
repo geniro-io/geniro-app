@@ -355,7 +355,7 @@ export function ThreadStartCard({
                   ? "The project's default agent or team"
                   : `Agent ${runsAs}`
             }
-            yields={false}
+            yields
           />
           {start.project === null ? null : (
             <ThreadLabelChip

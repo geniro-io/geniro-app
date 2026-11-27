@@ -206,6 +206,19 @@ describe('ThreadStartCard', () => {
     expect(container.textContent).toContain('Project default');
   });
 
+  it('lets the agent chip take its whole width in the wrapping labels row, as the project chip does', async () => {
+    await render(<ThreadStartCard pair={pair(FILED)} />, null);
+    const agent = container.querySelector('[data-slot="thread-start-agent"]');
+    const project = container.querySelector(
+      '[data-slot="thread-start-project"]',
+    );
+    expect(
+      container.querySelector('[data-slot="thread-start-labels"]')?.classList,
+    ).toContain('flex-wrap');
+    expect(agent?.classList).not.toContain('max-w-28');
+    expect(agent?.className).toBe(project?.className);
+  });
+
   it('moves from Starting to Started on the card’s own change, and opens the started thread', async () => {
     let current = card({
       startRequest: {

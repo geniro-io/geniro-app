@@ -68,11 +68,13 @@ export function useSettingsNotices({
 
   const shareWaits = useMemo(
     () =>
-      shares.items === null ? [] : shareWaitsByPlace(shares.items.values()),
+      remote || shares.items === null
+        ? null
+        : shareWaitsByPlace(shares.items.values()),
     [shares.items],
   );
   const conflictIds = useMemo(
-    () => (findings.items === null ? [] : [...findings.items.keys()]),
+    () => (findings.items === null ? null : [...findings.items.keys()]),
     [findings.items],
   );
   return useMemo(

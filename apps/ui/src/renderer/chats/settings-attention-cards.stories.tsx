@@ -119,6 +119,40 @@ export const AgentSignIn: Story = {
   ),
 };
 
+export const AgentSigningIn: Story = {
+  render: () => (
+    <AgentSignInCard
+      rows={[]}
+      login={
+        {
+          ...LOGIN,
+          login: {
+            kind: 'claude',
+            server: null,
+            configDir: '/Users/me/.claude-work',
+            session: {
+              id: 'login-1',
+              status: 'waiting',
+              url: 'https://example.test/sign-in',
+              message: null,
+            },
+          },
+        } as unknown as CliLoginController
+      }
+      nameOf={nameOf}
+      profiles={[
+        {
+          id: 'work',
+          name: 'Work account',
+          agent: 'claude',
+          dir: '/Users/me/.claude-work',
+          color: 'blue',
+        },
+      ]}
+    />
+  ),
+};
+
 export const GeniroUpdateAvailable: Story = {
   render: () => (
     <AppUpdateCard
@@ -148,6 +182,24 @@ export const SharesWaitingForSignIn: Story = {
         shareIds: ['s1', 's2', 's3'],
       }}
       api={{} as DaemonApis['shares']}
+      remote={false}
+      onDismiss={noop}
+    />
+  ),
+};
+
+export const SharesWaitingOnPhone: Story = {
+  render: () => (
+    <ShareSignInCard
+      wait={{
+        destinationId: 'gcs',
+        label: 'Google Cloud',
+        reason: null,
+        count: 3,
+        shareIds: ['s1', 's2', 's3'],
+      }}
+      api={{} as DaemonApis['shares']}
+      remote
       onDismiss={noop}
     />
   ),

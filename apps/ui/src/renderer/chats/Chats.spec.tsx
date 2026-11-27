@@ -22581,6 +22581,7 @@ describe('Chats — one hosted conversation', () => {
             kind: 'agent-updates' as const,
             key: 'agent-updates:claude',
             items: ['claude@3'],
+            label: null,
             openedAt: 'now',
             resolvedAt: null,
             dismissedAt: null,

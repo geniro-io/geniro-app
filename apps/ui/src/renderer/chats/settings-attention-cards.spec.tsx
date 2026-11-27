@@ -44,6 +44,7 @@ function notice(
     kind,
     key,
     items: [],
+    label: null,
     openedAt: '2026-11-27T10:00:00.000Z',
     resolvedAt: null,
     dismissedAt: null,
@@ -82,6 +83,7 @@ let listShares: ReturnType<typeof vi.fn>;
 let listMemoryFindings: ReturnType<typeof vi.fn>;
 let startCliLogin: ReturnType<typeof vi.fn>;
 let cancelCliLogin: ReturnType<typeof vi.fn>;
+let getCliLogin: ReturnType<typeof vi.fn>;
 let startShareSignIn: ReturnType<typeof vi.fn>;
 let notices: SettingsNotice[];
 let listCommandCenterNotices: ReturnType<typeof vi.fn>;
@@ -108,6 +110,7 @@ function apis(): DaemonApis {
       startCliLogin,
       submitCliLoginCode: vi.fn(),
       cancelCliLogin,
+      getCliLogin,
     },
   } as unknown as DaemonApis;
 }
@@ -256,6 +259,14 @@ beforeEach(() => {
       message: null,
     }),
   );
+  getCliLogin = vi.fn(() =>
+    Promise.resolve({
+      id: 'login-1',
+      status: 'waiting',
+      url: null,
+      message: null,
+    }),
+  );
   cancelCliLogin = vi.fn(() =>
     Promise.resolve({
       id: 'login-1',
@@ -396,6 +407,28 @@ describe('SettingsNoticeCard', () => {
     expect(relaunchForUpdate).toHaveBeenCalledTimes(1);
   });
 
+  it('names the offered Geniro version while a check fails, and the failure only of an install the user pressed', async () => {
+    appUpdate = updateState({
+      phase: 'error',
+      failedPhase: 'checking',
+      message: 'HTTP 403',
+    });
+    notices = [notice('app-update', 'app-update', { items: ['2.4.0'] })];
+    await draw({ rows: notices });
+    expect(cards('app-update')[0]?.textContent).toContain(
+      'Geniro 2.4.0 is available.',
+    );
+    expect(cards('app-update')[0]?.textContent).not.toContain('HTTP 403');
+
+    appUpdate = updateState({
+      phase: 'error',
+      failedPhase: 'downloading',
+      message: 'disk full',
+    });
+    await remount({ rows: notices });
+    expect(cards('app-update')[0]?.textContent).toContain('disk full');
+  });
+
   it('draws the Geniro update without its Mac-only buttons on a paired device', async () => {
     appUpdate = updateState({ phase: 'ready' });
     await draw({ remote: true });
@@ -449,12 +482,53 @@ describe('SettingsNoticeCard', () => {
     ).toBe(true);
   });
 
-  it("reads no shares on a paired device, whose share routes are the Mac's", async () => {
+  it("draws a storage notice on a paired device from what the notice holds, reading none of the Mac's shares", async () => {
     shares = [share('s1', 'gcs', 'Google Cloud')];
-    await draw({ remote: true });
+    notices = [
+      notice('share-sign-in', 'share-sign-in:gcs', {
+        items: ['s1', 's2'],
+        label: 'Google Cloud',
+      }),
+    ];
+    await draw({ remote: true, rows: notices });
 
     expect(listShares).not.toHaveBeenCalled();
-    expect(cards('share-sign-in')).toHaveLength(0);
+    const [card] = cards('share-sign-in') as [HTMLElement];
+    expect(
+      card.querySelector('[data-slot="settings-attention-member"]')
+        ?.textContent,
+    ).toBe('· Google Cloud');
+    expect(
+      card.querySelector('[data-slot="settings-attention-share-count"]')
+        ?.textContent,
+    ).toBe('2 shared links wait to be uploaded.');
+    expect(card.textContent).toContain('Sign in on the Mac.');
+    expect(
+      [...card.querySelectorAll('button')].map((node) => node.textContent),
+    ).toEqual(['Dismiss']);
+  });
+
+  it('draws a storage notice from what it holds on the Mac too until the shares are read, with its Sign in', async () => {
+    listShares = vi.fn(
+      () =>
+        new Promise<never>(() => {
+          /* never answers */
+        }),
+    );
+    notices = [
+      notice('share-sign-in', 'share-sign-in:gcs', {
+        items: ['s1'],
+        label: 'Google Cloud',
+      }),
+    ];
+    await draw({ rows: notices });
+
+    const [card] = cards('share-sign-in') as [HTMLElement];
+    expect(
+      card.querySelector('[data-slot="settings-attention-share-count"]')
+        ?.textContent,
+    ).toBe('1 shared link waits to be uploaded.');
+    expect(button(card, 'Sign in to Google Cloud')).not.toBeNull();
   });
 
   it("drops a place's card once a share announce says nothing waits there any more", async () => {
@@ -544,6 +618,20 @@ describe('SettingsNoticeCard', () => {
     expect(cards('memory-conflicts')).toHaveLength(0);
   });
 
+  it('draws the memory conflicts from what the notice holds until the findings are read', async () => {
+    notices = [
+      notice('memory-conflicts', 'memory-conflicts', { items: ['f1', 'f2'] }),
+    ];
+    await draw({ active: false, rows: notices });
+
+    expect(listMemoryFindings).not.toHaveBeenCalled();
+    expect(
+      cards('memory-conflicts')[0]?.querySelector(
+        '[data-slot="settings-attention-conflicts"]',
+      )?.textContent,
+    ).toBe('2 pairs of memory entries repeat or contradict each other.');
+  });
+
   it('signs in to the place whose card was pressed, as Settings → Sharing does', async () => {
     shares = [share('s1', 'gcs', 'Google Cloud'), share('s2', 'aws', 'Amazon')];
     await draw();
@@ -602,6 +690,28 @@ const ONE_OF_EACH: {
     },
   },
 ];
+
+describe('a paired device', () => {
+  it('draws a card at every open notice of every kind, so its chat button counts nothing it does not show', async () => {
+    for (const c of ONE_OF_EACH) {
+      c.once();
+    }
+    detections = [
+      det('claude', { loggedIn: false, update: withUpdate('2.0.0') }),
+    ];
+    notices = ONE_OF_EACH.map((c) =>
+      notice(c.kind, c.key, {
+        items: c.kind === 'share-sign-in' ? ['s1'] : [],
+        label: c.kind === 'share-sign-in' ? 'Google Cloud' : null,
+      }),
+    );
+    await draw({ remote: true, rows: notices });
+
+    expect(cards().map((card) => card.dataset.kind)).toEqual(
+      ONE_OF_EACH.map((c) => c.kind),
+    );
+  });
+});
 
 async function dismissCard(kind: string): Promise<void> {
   await act(async () => {
@@ -722,6 +832,85 @@ describe('dismissing a settings card', () => {
 
     expect(cancelCliLogin).toHaveBeenCalledTimes(1);
     expect(cards('agent-sign-in')).toEqual([]);
+  });
+
+  it("gives the other accounts' cards their Dismiss and Sign in back once a sign-in is cancelled", async () => {
+    detections = [
+      det('claude', { loggedIn: false, profileLogins: { '/cfg/work': false } }),
+    ];
+    await draw();
+    const [home, work] = cards('agent-sign-in') as [HTMLElement, HTMLElement];
+    await act(async () => {
+      button(work, 'Sign in')?.click();
+    });
+    expect(button(home, 'Sign in')?.disabled).toBe(true);
+
+    await act(async () => {
+      button(work, 'Cancel')?.click();
+    });
+
+    expect(button(home, 'Dismiss')).not.toBeNull();
+    expect(button(home, 'Sign in')?.disabled).toBe(false);
+  });
+
+  it('names the account being signed in, not a count of none, while its sign-in holds a card whose notice resolved', async () => {
+    detections = [det('claude', { profileLogins: { '/cfg/work': false } })];
+    await draw();
+    await act(async () => {
+      button(cards('agent-sign-in')[0] as HTMLElement, 'Sign in')?.click();
+    });
+    notices = notices.map((entry) =>
+      entry.key === 'agent-sign-in:claude:/cfg/work'
+        ? { ...entry, resolvedAt: '2026-11-27T11:00:00.000Z' }
+        : entry,
+    );
+    detections = [det('claude', { profileLogins: { '/cfg/work': true } })];
+    await act(async () => {
+      commandCenterChanged({ runIds: ['manager'], reason: 'notices' });
+    });
+
+    const [card] = cards('agent-sign-in') as [HTMLElement];
+    expect(
+      card.querySelector('[data-slot="settings-attention-label"]')?.textContent,
+    ).toBe('Signing in');
+    expect(
+      card.querySelector('[data-slot="settings-attention-member"]')
+        ?.textContent,
+    ).toBe('· claude · work');
+    expect(card.hasAttribute('data-decided')).toBe(false);
+  });
+
+  it('keeps one Cancel button through every step a sign-in reports, so a press during one is not lost', async () => {
+    vi.useFakeTimers();
+    try {
+      detections = [det('claude', { loggedIn: false })];
+      await draw();
+      await act(async () => {
+        button(cards('agent-sign-in')[0] as HTMLElement, 'Sign in')?.click();
+      });
+      const cancel = button(cards('agent-sign-in')[0] as HTMLElement, 'Cancel');
+      expect(cancel).not.toBeNull();
+
+      for (const step of [
+        { status: 'waiting', url: 'https://example.test/sign-in' },
+        { status: 'needs_code', url: 'https://example.test/sign-in' },
+      ]) {
+        getCliLogin.mockResolvedValueOnce({
+          id: 'login-1',
+          message: null,
+          ...step,
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_300);
+        });
+        expect(button(cards('agent-sign-in')[0] as HTMLElement, 'Cancel')).toBe(
+          cancel,
+        );
+      }
+      expect(cancel?.isConnected).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('draws a sign-in under way on the card of its own account only', async () => {

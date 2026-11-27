@@ -274,7 +274,13 @@ export const SettingsNoticeSchema = z
     items: z
       .array(z.string())
       .describe(
-        'Every item it has shown: a version, `<cli>@<version>`, `<cli>:<config dir>`, a share id or a memory finding id',
+        'What waits now, as last read — a version, `<cli>@<version>`, `<cli>:<config dir>`, a share id or a memory finding id; a dismissed notice keeps what it showed',
+      ),
+    label: z
+      .string()
+      .nullable()
+      .describe(
+        "What a `share-sign-in` notice's storage is called, as its Sign in button names it; null for every other kind",
       ),
     openedAt: z.string().describe('When it was first read, ISO 8601'),
     resolvedAt: z

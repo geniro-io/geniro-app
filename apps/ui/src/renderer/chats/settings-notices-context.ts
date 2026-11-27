@@ -19,8 +19,10 @@ export interface SettingsNoticesStore {
   login: CliLoginController;
   update: UpdateController;
   profiles: readonly ConfigProfile[];
-  shareWaits: readonly ShareWait[];
-  conflictIds: readonly string[];
+  /** Null where the shares are not read: a paired device, or before the first read answers. */
+  shareWaits: readonly ShareWait[] | null;
+  /** Null until the first read of the findings answers. */
+  conflictIds: readonly string[] | null;
   onOpenMemoryConflicts: (() => void) | null;
   remote: boolean;
 }

@@ -17299,11 +17299,17 @@ export interface SettingsNotice {
      */
     key: string;
     /**
-     * Every item it has shown: a version, `<cli>@<version>`, `<cli>:<config dir>`, a share id or a memory finding id
+     * What waits now, as last read — a version, `<cli>@<version>`, `<cli>:<config dir>`, a share id or a memory finding id; a dismissed notice keeps what it showed
      * @type {Array<string>}
      * @memberof SettingsNotice
      */
     items: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    label: string | null;
     /**
      * When it was first read, ISO 8601
      * @type {string}

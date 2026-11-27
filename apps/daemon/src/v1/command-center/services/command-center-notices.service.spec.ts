@@ -23,7 +23,26 @@ import { CommandCenterNoticesService } from './command-center-notices.service';
 const MANAGER = 'manager-1';
 
 type Db = Awaited<ReturnType<typeof commandCenterDb>>;
-type ShareRow = { id: string; destinationId: string; status: string };
+type ShareRow = {
+  id: string;
+  destinationId: string;
+  destinationName: string;
+  signIn: { cli: string; label: string } | null;
+  status: string;
+};
+
+function shareRow(id: string, destinationId: string, status: string): ShareRow {
+  return {
+    id,
+    destinationId,
+    destinationName: `${destinationId} bucket`,
+    signIn:
+      destinationId === 'gcloud'
+        ? { cli: 'gcloud', label: 'Google Cloud' }
+        : null,
+    status,
+  };
+}
 
 describe('CommandCenterNoticesService', () => {
   let db: Db;
@@ -170,7 +189,7 @@ describe('CommandCenterNoticesService', () => {
     await service.report(update('1.5.0'));
 
     expect(await noticeRows()).toHaveLength(1);
-    expect((await listed())[0]!.items).toEqual(['1.4.0', '1.5.0']);
+    expect((await listed())[0]!.items).toEqual(['1.5.0']);
   });
 
   it('resolves a notice once its reason goes and opens a new row when it comes back', async () => {
@@ -286,9 +305,9 @@ describe('CommandCenterNoticesService', () => {
 
   it('announces shares waiting on a sign-in once per place, on their change', async () => {
     shares = [
-      { id: 's1', destinationId: 'gcloud', status: 'awaiting-sign-in' },
-      { id: 's2', destinationId: 'gcloud', status: 'awaiting-sign-in' },
-      { id: 's3', destinationId: 'aws', status: 'uploaded' },
+      shareRow('s1', 'gcloud', 'awaiting-sign-in'),
+      shareRow('s2', 'gcloud', 'awaiting-sign-in'),
+      shareRow('s3', 'aws', 'live'),
     ];
 
     await service.review('share-sign-in');
@@ -296,11 +315,45 @@ describe('CommandCenterNoticesService', () => {
     expect((await noticeRows()).map((row) => row.settingsNotice.key)).toEqual([
       'share-sign-in:gcloud',
     ]);
-    expect((await listed())[0]!.items).toEqual(['s1', 's2']);
+    expect((await listed())[0]).toMatchObject({
+      items: ['s1', 's2'],
+      label: 'Google Cloud',
+    });
 
     shares = [];
     await service.review('share-sign-in');
     expect((await listed())[0]!.resolvedAt).not.toBeNull();
+  });
+
+  it('keeps a storage notice counting only the shares that still wait, named as its place is called, in one row', async () => {
+    shares = [
+      shareRow('s1', 'aws', 'awaiting-sign-in'),
+      shareRow('s2', 'aws', 'awaiting-sign-in'),
+    ];
+    await service.review('share-sign-in');
+    expect((await listed())[0]).toMatchObject({
+      items: ['s1', 's2'],
+      label: 'aws bucket',
+    });
+
+    shares = [
+      shareRow('s1', 'aws', 'live'),
+      shareRow('s2', 'aws', 'awaiting-sign-in'),
+    ];
+    await service.review('share-sign-in');
+
+    expect(await noticeRows()).toHaveLength(1);
+    expect((await listed())[0]).toMatchObject({
+      items: ['s2'],
+      label: 'aws bucket',
+      resolvedAt: null,
+    });
+  });
+
+  it('names no place on a notice of any other kind', async () => {
+    await service.report(update('1.4.0'));
+
+    expect((await listed())[0]!.label).toBeNull();
   });
 
   it('announces memory conflicts as one notice of their finding ids', async () => {
@@ -367,9 +420,7 @@ describe('CommandCenterNoticesService', () => {
   });
 
   it('reviews shares and memory conflicts on their own change announces and on a roster change', async () => {
-    shares = [
-      { id: 's1', destinationId: 'gcloud', status: 'awaiting-sign-in' },
-    ];
+    shares = [shareRow('s1', 'gcloud', 'awaiting-sign-in')];
     shareChanges.next({});
     await vi.waitFor(async () => {
       expect(await listed()).toHaveLength(1);

@@ -10,8 +10,8 @@ import type { SettingsNoticeKind } from '../../agents/chat.types';
  * One notice of something waiting on the user in Settings, announced once in
  * the command center's manager chat: open from its first reading until its
  * reason goes, at most one open per `key` and manager. `items` (a JSON array)
- * holds every item it has shown, so an item it already showed never reopens
- * it once dismissed. Deleted with its manager.
+ * holds what waits now, as last read; once dismissed it keeps what it showed,
+ * so an item it already showed never reopens it. Deleted with its manager.
  */
 @Entity({ tableName: 'command_center_notices' })
 export class CommandCenterNotice extends TimestampsEntity {
@@ -29,6 +29,10 @@ export class CommandCenterNotice extends TimestampsEntity {
 
   @Property({ type: 'text' })
   items!: string;
+
+  /** What a storage notice's place is called, so a device that cannot read shares still names it. */
+  @Property({ type: 'string', nullable: true })
+  label: string | null = null;
 
   @Property({ type: DateTimeType })
   openedAt!: Date;

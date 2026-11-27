@@ -23,6 +23,7 @@ import type { UpdateController } from '../updates/use-update-state';
 import { type CliLoginController, loginUnderWay } from '../use-cli-login';
 import { NoticeCard } from './notice-card';
 import {
+  appInstallFailed,
   appUpdateUnsettled,
   appUpdateWaits,
   configDirName,
@@ -30,6 +31,7 @@ import {
   type ShareWait,
   shareWaitOf,
   signInNoticeKey,
+  storedShareWait,
 } from './settings-attention';
 import type { SettingsNoticeRowView } from './settings-notice-payload';
 import { SettingsNoticesContext } from './settings-notices-context';
@@ -145,27 +147,31 @@ export function AgentSignInCard({
   ownsLogin?: boolean;
 }): React.JSX.Element {
   const busy = loginUnderWay(login);
-  const dismissable =
-    rows.length > 0 && login.starting === null && login.login === null;
+  const signingHere = ownsLogin && busy;
+  const signing = login.starting ?? login.login;
+  const accountName = (kind: string, configDir: string | null): string =>
+    configDir === null
+      ? nameOf(kind)
+      : `${nameOf(kind)} · ${configDirName(configDir, profiles)}`;
+  const heading =
+    rows.length === 0 && signingHere && signing !== null
+      ? accountName(signing.kind, signing.configDir)
+      : plural(rows.length, 'account', 'accounts');
   return (
     <NoticeCard
       slot={SLOT}
       kind="agent-sign-in"
       icon={KeyRound}
-      label="Sign-in needed"
-      heading={plural(rows.length, 'account', 'accounts')}
-      settled={rows.length === 0}
+      label={rows.length === 0 && signingHere ? 'Signing in' : 'Sign-in needed'}
+      heading={heading}
+      settled={rows.length === 0 && !signingHere}
       settledIcon={CircleCheck}
       settledLabel="Signed in"
-      onDismiss={dismissable ? onDismiss : undefined}>
+      onDismiss={rows.length > 0 && !signingHere ? onDismiss : undefined}>
       {rows.length === 0 ? null : (
         <Rows>
           {rows.map((row) => {
-            const name = nameOf(row.kind);
-            const text =
-              row.configDir === null
-                ? name
-                : `${name} · ${configDirName(row.configDir, profiles)}`;
+            const text = accountName(row.kind, row.configDir);
             const starting =
               login.starting?.kind === row.kind &&
               login.starting.server === null &&
@@ -219,7 +225,7 @@ export function AppUpdateCard({
 }): React.JSX.Element | null {
   const state = update.state;
   const text =
-    state !== null && (appUpdateWaits(state) || state.phase === 'error')
+    state !== null && (appUpdateWaits(state) || appInstallFailed(state))
       ? updateStatusText(state)
       : offered === null
         ? null
@@ -255,10 +261,13 @@ export function AppUpdateCard({
 export function ShareSignInCard({
   wait,
   api,
+  remote,
   onDismiss,
 }: {
   wait: ShareWait;
   api: DaemonApis['shares'];
+  /** A paired device: the storage is signed in to on the Mac, so the card says so instead of offering it. */
+  remote: boolean;
   onDismiss?: () => void;
 }): React.JSX.Element {
   return (
@@ -273,14 +282,18 @@ export function ShareSignInCard({
         data-slot="settings-attention-share-count"
         className="m-0 text-sm break-words">
         {plural(wait.count, 'shared link waits', 'shared links wait')} to be
-        uploaded. {wait.reason}.
+        uploaded.{wait.reason === null ? null : ` ${wait.reason}.`}
       </p>
-      <SignInAction
-        api={api}
-        destinationId={wait.destinationId}
-        label={wait.label}
-        className="self-start"
-      />
+      {remote ? (
+        <p className="m-0 text-xs text-muted-foreground">Sign in on the Mac.</p>
+      ) : (
+        <SignInAction
+          api={api}
+          destinationId={wait.destinationId}
+          label={wait.label}
+          className="self-start"
+        />
+      )}
     </NoticeCard>
   );
 }
@@ -333,8 +346,8 @@ export function MemoryConflictsCard({
  * A Settings notice's row in the manager chat: the card Settings' own live
  * readings draw for it while the notice stands and was not dismissed, nothing
  * otherwise. While a live reading is not known (a check under way, an account
- * not asked yet) the card is drawn from what the notice holds. A sign-in under
- * way keeps its card until it ends.
+ * not asked yet, shares a paired device cannot read) the card is drawn from what
+ * the notice holds. A sign-in under way keeps its card until it ends.
  */
 export function SettingsNoticeCard({
   row,
@@ -421,22 +434,28 @@ export function SettingsNoticeCard({
       );
     }
     case 'share-sign-in': {
-      const wait = shareWaitOf(store.shareWaits, row.key);
+      const wait =
+        store.shareWaits === null
+          ? storedShareWait(notice)
+          : shareWaitOf(store.shareWaits, row.key);
       return wait === null ? null : (
         <ShareSignInCard
           wait={wait}
           api={store.apis.shares}
+          remote={store.remote}
           onDismiss={onDismiss}
         />
       );
     }
-    case 'memory-conflicts':
-      return store.conflictIds.length === 0 ? null : (
+    case 'memory-conflicts': {
+      const findingIds = store.conflictIds ?? notice.items;
+      return findingIds.length === 0 ? null : (
         <MemoryConflictsCard
-          findingIds={store.conflictIds}
+          findingIds={findingIds}
           onOpen={store.onOpenMemoryConflicts}
           onDismiss={onDismiss}
         />
       );
+    }
   }
 }

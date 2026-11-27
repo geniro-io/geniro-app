@@ -21,6 +21,7 @@ function notice(
     kind: 'app-update',
     key: 'app-update',
     items: ['1.0.0'],
+    label: null,
     openedAt: '2026-11-27T10:00:00.000Z',
     resolvedAt: null,
     dismissedAt: null,

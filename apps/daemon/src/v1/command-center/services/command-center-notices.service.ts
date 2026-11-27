@@ -67,6 +67,7 @@ export function noticeToWire(row: CommandCenterNotice): SettingsNotice {
     kind: row.kind,
     key: row.key,
     items: itemsOf(row),
+    label: row.label,
     openedAt: row.openedAt.toISOString(),
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
     dismissedAt: row.dismissedAt?.toISOString() ?? null,
@@ -261,22 +262,22 @@ export class CommandCenterNoticesService
   ): Promise<NoticeReading[]> {
     if (kind === 'memory-conflicts') {
       const ids = (await this.findings.open()).map((finding) => finding.id);
-      return [{ kind, key: kind, items: ids }];
+      return [{ kind, key: kind, items: ids, label: null }];
     }
-    const byPlace = new Map<string, string[]>();
+    const byPlace = new Map<string, NoticeReading>();
     for (const share of await this.shares.list()) {
-      if (share.status === 'awaiting-sign-in') {
-        byPlace.set(share.destinationId, [
-          ...(byPlace.get(share.destinationId) ?? []),
-          share.id,
-        ]);
+      if (share.status !== 'awaiting-sign-in') {
+        continue;
       }
+      const key = `share-sign-in:${share.destinationId}`;
+      byPlace.set(key, {
+        kind,
+        key,
+        items: [...(byPlace.get(key)?.items ?? []), share.id],
+        label: share.signIn?.label ?? share.destinationName,
+      });
     }
-    return [...byPlace].map(([destinationId, items]) => ({
-      kind,
-      key: `share-sign-in:${destinationId}`,
-      items,
-    }));
+    return [...byPlace.values()];
   }
 
   private apply(
@@ -293,6 +294,7 @@ export class CommandCenterNoticesService
           kind: row.kind,
           key: row.key,
           items: itemsOf(row),
+          label: row.label,
           dismissed: row.dismissedAt !== null,
         }),
       );
@@ -304,8 +306,8 @@ export class CommandCenterNoticesService
       for (const step of steps) {
         if (step.op === 'resolve') {
           await this.dao.resolve(step.id, at);
-        } else if (step.op === 'widen') {
-          await this.dao.setItems(step.id, step.items);
+        } else if (step.op === 'update') {
+          await this.dao.update(step.id, step.items, step.label);
         } else {
           await this.announce(managerRunId, step.reading, at);
         }
@@ -334,6 +336,7 @@ export class CommandCenterNoticesService
         kind: reading.kind,
         key: reading.key,
         items: reading.items,
+        label: reading.label,
         openedAt: at,
       });
     }

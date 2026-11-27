@@ -4,6 +4,8 @@ export interface NoticeReading {
   kind: SettingsNoticeKind;
   key: string;
   items: readonly string[];
+  /** What a storage notice's place is called; null for every other kind. */
+  label: string | null;
 }
 
 /**
@@ -30,7 +32,12 @@ export function readingsByKey(
     const key = keyOf(item);
     byKey.set(key, [...(byKey.get(key) ?? []), item]);
   }
-  return [...byKey].map(([key, keyed]) => ({ kind, key, items: keyed }));
+  return [...byKey].map(([key, keyed]) => ({
+    kind,
+    key,
+    items: keyed,
+    label: null,
+  }));
 }
 
 export interface OpenNotice {
@@ -38,20 +45,27 @@ export interface OpenNotice {
   kind: SettingsNoticeKind;
   key: string;
   items: readonly string[];
+  label: string | null;
   dismissed: boolean;
 }
 
 export type NoticeStep =
   | { op: 'open'; reading: NoticeReading }
   | { op: 'resolve'; id: string }
-  | { op: 'widen'; id: string; items: string[] };
+  | { op: 'update'; id: string; items: string[]; label: string | null };
+
+function sameItems(a: readonly string[], b: readonly string[]): boolean {
+  const known = new Set(a);
+  return a.length === b.length && b.every((item) => known.has(item));
+}
 
 /**
  * What a reading of `kinds` does to the open notices. A key read with no items
  * resolves its notice, unless the key is `unsettled`: a reading not known right
- * now leaves its notice as it is. A key with no open notice opens one. An item
- * the open notice never showed widens it, or — once it was dismissed — resolves
- * it and opens a new one, so a dismissed notice comes back only as a new notice.
+ * now leaves its notice as it is. A key with no open notice opens one. An open
+ * notice takes what its key holds now, in place; once it was dismissed it keeps
+ * what it showed, and an item it never showed resolves it and opens a new one,
+ * so a dismissed notice comes back only as a new notice.
  */
 export function planNotices(
   open: readonly OpenNotice[],
@@ -83,18 +97,20 @@ export function planNotices(
       steps.push({ op: 'open', reading });
       continue;
     }
-    const shown = new Set(notice.items);
-    const fresh = reading.items.filter((item) => !shown.has(item));
-    if (fresh.length === 0) {
-      continue;
-    }
     if (notice.dismissed) {
-      steps.push({ op: 'resolve', id: notice.id }, { op: 'open', reading });
-    } else {
+      const shown = new Set(notice.items);
+      if (reading.items.some((item) => !shown.has(item))) {
+        steps.push({ op: 'resolve', id: notice.id }, { op: 'open', reading });
+      }
+    } else if (
+      !sameItems(notice.items, reading.items) ||
+      notice.label !== reading.label
+    ) {
       steps.push({
-        op: 'widen',
+        op: 'update',
         id: notice.id,
-        items: [...notice.items, ...fresh],
+        items: [...reading.items],
+        label: reading.label,
       });
     }
   }

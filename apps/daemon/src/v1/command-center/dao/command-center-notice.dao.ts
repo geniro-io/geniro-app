@@ -18,6 +18,7 @@ export class CommandCenterNoticeDao extends BaseDao<CommandCenterNotice> {
     kind: SettingsNoticeKind;
     key: string;
     items: readonly string[];
+    label: string | null;
     openedAt: Date;
   }): Promise<CommandCenterNotice> {
     const em = this.em.fork();
@@ -52,10 +53,14 @@ export class CommandCenterNoticeDao extends BaseDao<CommandCenterNotice> {
     );
   }
 
-  async setItems(id: string, items: readonly string[]): Promise<void> {
+  async update(
+    id: string,
+    items: readonly string[],
+    label: string | null,
+  ): Promise<void> {
     await this.getRepo(this.em.fork()).nativeUpdate(
       { id },
-      { items: JSON.stringify(items) },
+      { items: JSON.stringify(items), label },
     );
   }
 

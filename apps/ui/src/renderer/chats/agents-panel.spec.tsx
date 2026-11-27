@@ -1545,9 +1545,11 @@ describe('AgentsPanel', () => {
 
     // The per-SERVER path is still wired: the card surfaces the server's
     // needs-sign-in state, which it can only do from a listing it still renders.
-    expect(cardFor(el, 'Orchestrator').textContent).toContain('Needs sign-in');
+    expect(mcpPopup().textContent).toContain('Needs sign-in');
     // The per-CLI control — gone. Its `aria-label` was `Sign in to <cli>`.
-    expect(el.querySelector('button[aria-label^="Sign in to"]')).toBeNull();
+    expect(
+      document.querySelector('button[aria-label^="Sign in to"]'),
+    ).toBeNull();
     // KNOWN LIMIT: this pins that the MCP path survives and the per-CLI button
     // does not, but it does not click the per-SERVER button — that row sits
     // behind a disclosure this fixture does not manage to expand. The
@@ -1555,6 +1557,11 @@ describe('AgentsPanel', () => {
     // `AgentsPanel — MCP servers`, which owns that setup.
   });
 });
+
+/** The open popup, which lives in `document.body` rather than the card. */
+function mcpPopup(): HTMLElement {
+  return document.querySelector<HTMLElement>('[role="dialog"]')!;
+}
 
 /** The card of the agent whose name is given. */
 function cardFor(el: HTMLDivElement, name: string): Element {
@@ -1657,12 +1664,12 @@ describe('AgentsPanel — MCP servers', () => {
 
     openMcpList(el, 'Worker');
 
-    expect(cardFor(el, 'Worker').textContent).toContain('sentry');
+    expect(mcpPopup().textContent).toContain('sentry');
     expect(cardFor(el, 'Worker').textContent).toContain(
       'Write a haiku about rivers.',
     );
     // …and no OTHER card opened with it.
-    expect(cardFor(el, 'Orchestrator').textContent).not.toContain('sentry');
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
   });
 
   it('keeps the rows behind the trigger until it is pressed', () => {
@@ -1686,7 +1693,7 @@ describe('AgentsPanel — MCP servers', () => {
     ).not.toBeNull();
 
     openMcpList(el);
-    expect(cardFor(el, 'Orchestrator').textContent).toContain('sentry');
+    expect(mcpPopup().textContent).toContain('sentry');
   });
 
   it('tells the owner when a list opens and when it closes', () => {
@@ -1797,7 +1804,7 @@ describe('AgentsPanel — MCP servers', () => {
     );
     openMcpList(el);
 
-    const orchestrator = cardFor(el, 'Orchestrator');
+    const orchestrator = mcpPopup();
     expect(orchestrator.textContent).toContain('sentry');
     expect(orchestrator.textContent).toContain('linear');
     // A healthy server is carried by its dot alone — repeating "connected" on
@@ -1828,9 +1835,9 @@ describe('AgentsPanel — MCP servers', () => {
     );
     openMcpList(el);
 
-    const failing = [
-      ...cardFor(el, 'Orchestrator').querySelectorAll('li'),
-    ].find((row) => row.textContent?.includes('linear'));
+    const failing = [...mcpPopup().querySelectorAll('li')].find((row) =>
+      row.textContent?.includes('linear'),
+    );
     // As TEXT in the row, reachable without a pointer — not as a tooltip on a
     // non-focusable element, which is where it used to live.
     expect(failing?.textContent).toContain('HTTP 502: upstream dial failed');
@@ -1867,7 +1874,7 @@ describe('AgentsPanel — MCP servers', () => {
     );
     openMcpList(el, 'Reviewer');
 
-    const reviewer = cardFor(el, 'Reviewer');
+    const reviewer = mcpPopup();
     expect(reviewer.textContent).toContain(
       'could not read MCP servers — cursor-agent did not answer',
     );
@@ -1876,7 +1883,7 @@ describe('AgentsPanel — MCP servers', () => {
     // …and the claude agent in the SAME run still gets rows. Opened after,
     // because one list is open at a time.
     openMcpList(el, 'Orchestrator');
-    expect(cardFor(el, 'Orchestrator').textContent).toContain('sentry');
+    expect(mcpPopup().textContent).toContain('sentry');
   });
 
   it('says "No servers" when the CLI could be asked and had none', () => {
@@ -1903,7 +1910,7 @@ describe('AgentsPanel — MCP servers', () => {
     );
     openMcpList(el);
 
-    expect(cardFor(el, 'Orchestrator').textContent).toContain('No servers');
+    expect(mcpPopup().textContent).toContain('No servers');
   });
 
   it('does not claim "No servers" for an agent nothing has answered for', () => {
@@ -1920,7 +1927,7 @@ describe('AgentsPanel — MCP servers', () => {
     );
     openMcpList(el);
 
-    const orchestrator = cardFor(el, 'Orchestrator');
+    const orchestrator = mcpPopup();
     expect(orchestrator.textContent).toContain('Not checked');
     expect(orchestrator.textContent).not.toContain('No servers');
   });
@@ -1938,7 +1945,7 @@ describe('AgentsPanel — MCP servers', () => {
       />,
     );
     openMcpList(el);
-    click(el.querySelector('button[aria-label="Refresh MCP servers"]'));
+    click(document.querySelector('button[aria-label="Refresh MCP servers"]'));
     expect(onRefreshMcp).toHaveBeenCalledOnce();
 
     // A read in flight already health-checks the user's servers; a second
@@ -1955,7 +1962,7 @@ describe('AgentsPanel — MCP servers', () => {
         />,
       );
     });
-    const refresh = el.querySelector<HTMLButtonElement>(
+    const refresh = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Refresh MCP servers"]',
     );
     // A real disabled <button>, not an aria-disabled div — that is what makes
@@ -1980,7 +1987,7 @@ describe('AgentsPanel — MCP servers', () => {
     );
     openMcpList(el);
     expect(
-      el.querySelector('button[aria-label="Refresh MCP servers"]'),
+      document.querySelector('button[aria-label="Refresh MCP servers"]'),
     ).toBeNull();
   });
 
@@ -2057,10 +2064,10 @@ describe('AgentsPanel — per-node MCP scope', () => {
     );
     // Read one at a time — a press on the second trigger closes the first.
     openMcpList(el, 'Reviewer');
-    expect(cardFor(el, 'Reviewer').textContent).toContain('linear');
+    expect(mcpPopup().textContent).toContain('linear');
 
     openMcpList(el, 'Writer');
-    expect(cardFor(el, 'Writer').textContent).toContain('sentry');
+    expect(mcpPopup().textContent).toContain('sentry');
   });
 
   it('leaves a node with no answer for its own scope unlisted', () => {
@@ -2077,7 +2084,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
     );
     openMcpList(el);
 
-    expect(el.textContent ?? '').not.toContain('only-plugin-less');
+    expect(document.body.textContent ?? '').not.toContain('only-plugin-less');
   });
 
   it('signs in under the NODE’s own profile, the one its listing was taken under', () => {
@@ -2121,13 +2128,13 @@ describe('AgentsPanel — per-node MCP scope', () => {
     );
     openMcpList(el, 'Engineer');
     // The row sits inside the "Needs sign-in" group, which is a disclosure.
-    const group = [...el.querySelectorAll('button')].find((button) =>
+    const group = [...document.querySelectorAll('button')].find((button) =>
       button.textContent?.includes('Needs sign-in'),
     )!;
     act(() => {
       group.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    const signIn = [...el.querySelectorAll('button')].find(
+    const signIn = [...document.querySelectorAll('button')].find(
       (button) => button.textContent?.trim() === 'Sign in',
     )!;
     act(() => {
@@ -2240,7 +2247,7 @@ describe('AgentsPanel — MCP toggle', () => {
     );
     openMcpList(el);
 
-    expect(switchesIn(cardFor(el, 'Orchestrator'))).toHaveLength(1);
+    expect(switchesIn(mcpPopup())).toHaveLength(1);
   });
 
   it('renders NO switch for a row the daemon says cannot be toggled', () => {
@@ -2269,7 +2276,7 @@ describe('AgentsPanel — MCP toggle', () => {
     );
     openMcpList(el);
 
-    expect(switchesIn(cardFor(el, 'Orchestrator'))).toHaveLength(0);
+    expect(switchesIn(mcpPopup())).toHaveLength(0);
   });
 
   it('shows the daemon’s reason on a row that cannot be toggled', () => {
@@ -2298,9 +2305,7 @@ describe('AgentsPanel — MCP toggle', () => {
     );
     openMcpList(el);
 
-    expect(
-      cardFor(el, 'Orchestrator').querySelector(`[aria-label="${reason}"]`),
-    ).not.toBeNull();
+    expect(mcpPopup().querySelector(`[aria-label="${reason}"]`)).not.toBeNull();
   });
 
   it('reflects a disabled server as off, not on', () => {
@@ -2319,9 +2324,9 @@ describe('AgentsPanel — MCP toggle', () => {
     );
     openMcpList(el);
 
-    expect(
-      switchesIn(cardFor(el, 'Orchestrator'))[0]?.getAttribute('aria-checked'),
-    ).toBe('false');
+    expect(switchesIn(mcpPopup())[0]?.getAttribute('aria-checked')).toBe(
+      'false',
+    );
   });
 
   it('asks to ENABLE a server that is currently off', () => {
@@ -2344,7 +2349,7 @@ describe('AgentsPanel — MCP toggle', () => {
     openMcpList(el);
 
     act(() => {
-      switchesIn(cardFor(el, 'Orchestrator'))[0]?.click();
+      switchesIn(mcpPopup())[0]?.click();
     });
 
     expect(onSetMcpEnabled).toHaveBeenCalledWith(
@@ -2368,7 +2373,7 @@ describe('AgentsPanel — MCP toggle', () => {
     openMcpList(el);
 
     act(() => {
-      switchesIn(cardFor(el, 'Orchestrator'))[0]?.click();
+      switchesIn(mcpPopup())[0]?.click();
     });
 
     expect(onSetMcpEnabled).toHaveBeenCalledWith(
@@ -2406,7 +2411,7 @@ describe('AgentsPanel — MCP toggle', () => {
     openMcpList(el);
 
     act(() => {
-      switchesIn(cardFor(el, 'Orchestrator'))[0]?.click();
+      switchesIn(mcpPopup())[0]?.click();
     });
 
     expect(onSetMcpEnabled).toHaveBeenCalledWith(
@@ -2428,7 +2433,7 @@ describe('AgentsPanel — MCP toggle', () => {
     );
     openMcpList(el);
 
-    expect(switchesIn(cardFor(el, 'Orchestrator'))).toHaveLength(0);
+    expect(switchesIn(mcpPopup())).toHaveLength(0);
   });
 
   it('shows a failed toggle instead of letting the switch snap back silently', () => {
@@ -2445,7 +2450,7 @@ describe('AgentsPanel — MCP toggle', () => {
     );
     openMcpList(el);
 
-    expect(el.textContent).toContain('not project scope');
+    expect(document.body.textContent).toContain('not project scope');
   });
 
   it('disables the switch while a read or write is in flight', () => {
@@ -2463,7 +2468,7 @@ describe('AgentsPanel — MCP toggle', () => {
     );
     openMcpList(el);
 
-    expect(switchesIn(cardFor(el, 'Orchestrator'))[0]?.disabled).toBe(true);
+    expect(switchesIn(mcpPopup())[0]?.disabled).toBe(true);
   });
 });
 
@@ -4179,7 +4184,7 @@ describe('AgentsPanel — the notes control', () => {
     click(el.querySelector('button[aria-label="Open thread notes"]'));
 
     expect(onOpen).toHaveBeenCalledTimes(1);
-    expect(el.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('draws no notes control when it is not handed a way to open them', () => {
@@ -4359,7 +4364,7 @@ describe('AgentsPanel — the run readouts open in popups', () => {
       el.querySelector('section[aria-label="Where the run went"]'),
     ).toBeNull();
     expect(el.querySelector('section[aria-label="Processes"]')).toBeNull();
-    expect(el.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('draws no control for a readout it was not handed', () => {
@@ -4397,13 +4402,13 @@ describe('AgentsPanel — the run readouts open in popups', () => {
 
       click(el.querySelector(`button[aria-label="${label}"]`));
 
-      const dialog = el.querySelector('[role="dialog"]');
+      const dialog = document.querySelector('[role="dialog"]');
       expect(dialog?.textContent).toContain(text);
       expect(onPopupChange).toHaveBeenLastCalledWith(popup);
 
       click(dialog!.querySelector('button[aria-label="Close"]'));
 
-      expect(el.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
       expect(onPopupChange).toHaveBeenLastCalledWith(null);
     },
   );
@@ -4411,7 +4416,7 @@ describe('AgentsPanel — the run readouts open in popups', () => {
   it('opens the processes popup another screen asked for, once, and says so', () => {
     const onPopupChange = vi.fn();
     const onPopupRequestHandled = vi.fn();
-    const el = renderFolded(
+    renderFolded(
       <AgentsPanel
         terminalReasons={TERMINALS}
         agents={agents}
@@ -4423,7 +4428,7 @@ describe('AgentsPanel — the run readouts open in popups', () => {
       />,
     );
 
-    expect(el.querySelector('[role="dialog"]')?.textContent).toContain(
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
       'reading processes…',
     );
     expect(onPopupChange).toHaveBeenLastCalledWith('processes');
@@ -4443,7 +4448,7 @@ describe('AgentsPanel — the run readouts open in popups', () => {
     );
     click(el.querySelector('button[aria-label="Processes"]'));
 
-    expect(el.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     expect(onPopupChange).toHaveBeenLastCalledWith('processes');
   });
 
@@ -4519,7 +4524,7 @@ describe('AgentsPanel — a pooled agent’s MCP servers', () => {
       />,
     );
     openMcpList(el, 'Worker');
-    const card = cardFor(el, 'Worker');
+    const card = mcpPopup();
     // call-2 is the live one, and it runs on member 2.
     expect(card.textContent).toContain('codex_apps');
     expect(card.textContent).not.toContain('sentry');
@@ -4547,8 +4552,10 @@ describe('AgentsPanel — a pooled agent’s MCP servers', () => {
       />,
     );
     openMcpList(el, 'Orchestrator');
-    expect(el.querySelector('[data-slot="segmented-control"]')).toBeNull();
-    expect(el.textContent).toContain('sentry');
+    expect(
+      document.querySelector('[data-slot="segmented-control"]'),
+    ).toBeNull();
+    expect(mcpPopup().textContent).toContain('sentry');
   });
 });
 

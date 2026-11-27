@@ -1,16 +1,24 @@
 import { X } from 'lucide-react';
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 
 import { useReportOverlayOpen } from '../browser-occlusion';
+import { usePhoneBackEntry } from '../use-phone-back-entry';
 import { Button } from './button';
-import { counterZoomStyle } from './css-zoom';
 import { pushEscapeLayer } from './escape-layers';
 import { MenuAnchorContext } from './menu-anchor';
+import { showInTopLayer } from './top-layer';
 import { cn } from './utils';
 
 /** What the focus trap treats as tabbable inside the dialog card. */
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** The history-entry owner of a full-screen dialog (see `usePhoneBackEntry`). */
+const FULL_SCREEN_BACK_OWNER = 'full-screen-dialog';
+
+/** True inside a viewer dialog, whose Back must close a dialog over it first. */
+const InViewerDialog = React.createContext(false);
 
 /**
  * A minimal modal dialog: a dark backdrop + a centered token-styled card.
@@ -23,6 +31,19 @@ const FOCUSABLE_SELECTOR =
  *
  * Escape closes only the dialog on TOP (see `pushEscapeLayer`), and never one whose
  * control inside it already handled the key (`preventDefault`).
+ *
+ * Portalled to `document.body`: an ancestor's `overflow`, `transform` or CSS
+ * `zoom` would otherwise clip, move or scale the fixed overlay (a chat in a
+ * floating window, a zoomed command-center card), and a dialog opened from
+ * inline content (a markdown image inside a `<p>`) leaves no block markup there.
+ * Shown in the top layer, so a viewport popover it was opened from (the answer
+ * popover's question card) cannot paint over it.
+ *
+ * A dismissible viewer — a full-screen dialog or one marked `viewer` — and any
+ * dismissible dialog opened inside one holds a browser history entry while
+ * open, so the platform's Back closes the top one; the ✕, Escape and the
+ * backdrop pop that entry rather than close beside it, so every way out runs
+ * `onClose` exactly once. A viewer's ✕ is 44px and sits inside the safe area.
  */
 export function Dialog({
   open,
@@ -31,6 +52,7 @@ export function Dialog({
   children,
   className,
   fullScreen = false,
+  viewer = false,
   flush = false,
   initialFocus,
   coversBrowser = true,
@@ -43,6 +65,12 @@ export function Dialog({
   className?: string;
   /** Fill the window, with no card border, rounded corners or content padding. */
   fullScreen?: boolean;
+  /**
+   * A window the user looks at rather than fills in (a picture, a report): it
+   * takes a full-screen dialog's Back entry and 44px close in the safe area,
+   * while keeping its card. A full-screen dialog is always one.
+   */
+  viewer?: boolean;
   /**
    * No content padding, in a card: the content draws its own edges and
    * scrolls its own parts (a hosted chat screen's transcript over its composer).
@@ -63,24 +91,17 @@ export function Dialog({
   dismissible?: boolean;
 }): React.JSX.Element | null {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
-  const overlayRef = React.useRef<HTMLDivElement | null>(null);
-  const [counterZoom, setCounterZoom] = React.useState<{ zoom?: number }>({});
-  React.useLayoutEffect(() => {
-    if (!open) {
-      return;
-    }
-    const measure = (): void =>
-      setCounterZoom(counterZoomStyle(overlayRef.current?.parentElement));
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, [open]);
-  // Read through a ref rather than put in the effect's dependencies: callers
-  // pass inline arrows, so every render of the screen around an OUTER dialog
-  // hands it a new `onClose` — and re-registering on that would move it back
-  // to the top of the stack, over the dialog the user actually opened last.
-  const onCloseRef = React.useRef(onClose);
-  onCloseRef.current = onClose;
+  const insideViewer = React.useContext(InViewerDialog);
+  const isViewer = fullScreen || viewer;
+  const close = usePhoneBackEntry(
+    FULL_SCREEN_BACK_OWNER,
+    open && dismissible && (isViewer || insideViewer),
+    onClose,
+  );
+  // The Escape layer must not re-register on a render: that would move an OUTER
+  // dialog back to the top of the stack, over the dialog the user opened last.
+  // `close` is stable and reads the latest `onClose` itself; the rest goes
+  // through refs.
   const dismissibleRef = React.useRef(dismissible);
   dismissibleRef.current = dismissible;
   const initialFocusRef = React.useRef(initialFocus);
@@ -95,11 +116,11 @@ export function Dialog({
     return pushEscapeLayer({
       close: () => {
         if (dismissibleRef.current) {
-          onCloseRef.current();
+          close();
         }
       },
     });
-  }, [open]);
+  }, [open, close]);
 
   React.useEffect(() => {
     if (!open) {
@@ -157,20 +178,28 @@ export function Dialog({
     return null;
   }
 
-  return (
+  return createPortal(
     <div
-      ref={overlayRef}
+      ref={(node) => {
+        if (node !== null) {
+          showInTopLayer(node);
+        }
+      }}
+      popover="manual"
       role="dialog"
       aria-modal="true"
-      style={counterZoom}
       className={cn(
         // Electron's title-bar drag region still intercepts native presses
         // beneath an overlay, regardless of its z-index. Exclude the whole
         // modal so its header controls and backdrop receive clicks there too.
-        'app-no-drag fixed inset-0 z-50 flex items-center justify-center',
-        !fullScreen && 'p-4',
+        'app-no-drag fixed inset-0 z-50 m-0 flex w-full items-center justify-center overflow-visible border-0 bg-transparent text-foreground',
+        fullScreen && 'h-dvh p-0',
+        viewer &&
+          !fullScreen &&
+          'h-dvh pt-[max(1rem,env(safe-area-inset-top))] pr-[max(1rem,env(safe-area-inset-right))] pb-[max(1rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))]',
+        !isViewer && 'h-full p-4',
       )}
-      onClick={dismissible ? onClose : undefined}>
+      onClick={dismissible ? close : undefined}>
       <div className="absolute inset-0 bg-foreground/30" aria-hidden="true" />
       <div
         ref={cardRef}
@@ -190,7 +219,14 @@ export function Dialog({
           className,
         )}
         onClick={(event) => event.stopPropagation()}>
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-5 py-3.5">
+        <div
+          className={cn(
+            'flex shrink-0 items-center justify-between gap-2 border-b border-border',
+            fullScreen &&
+              'pt-[max(0.375rem,env(safe-area-inset-top))] pr-[max(0.5rem,env(safe-area-inset-right))] pb-1.5 pl-[max(1.25rem,env(safe-area-inset-left))]',
+            viewer && !fullScreen && 'py-1.5 pr-2 pl-5',
+            !isViewer && 'px-5 py-3.5',
+          )}>
           {/* `min-w-0` so a long title (an image viewer's file path) can be
               truncated or wrapped by the title node itself — a flex item
               defaults to `min-width: auto`, which refuses to shrink below its
@@ -216,10 +252,13 @@ export function Dialog({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-7 shrink-0 text-muted-foreground"
+              className={cn(
+                'shrink-0 text-muted-foreground',
+                isViewer ? 'size-[44px]' : 'size-7',
+              )}
               aria-label="Close"
-              onClick={onClose}>
-              <X className="size-4" />
+              onClick={close}>
+              <X className={isViewer ? 'size-5' : 'size-4'} />
             </Button>
           ) : null}
         </div>
@@ -258,10 +297,13 @@ export function Dialog({
               'min-h-0 flex-1 overflow-y-auto break-words',
               !fullScreen && !flush && 'px-5 py-4',
             )}>
-            {children}
+            <InViewerDialog.Provider value={isViewer || insideViewer}>
+              {children}
+            </InViewerDialog.Provider>
           </div>
         </MenuAnchorContext.Provider>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

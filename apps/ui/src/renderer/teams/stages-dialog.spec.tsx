@@ -80,12 +80,12 @@ function type(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
 }
 
 const button = (name: string): HTMLButtonElement | null =>
-  [...container.querySelectorAll('button')].find(
+  [...document.querySelectorAll('button')].find(
     (b) => b.textContent?.trim() === name,
   ) ?? null;
 
 const rows = (): HTMLElement[] => [
-  ...container.querySelectorAll<HTMLElement>('[data-slot="stage-row"]'),
+  ...document.querySelectorAll<HTMLElement>('[data-slot="stage-row"]'),
 ];
 const rowTitles = (): (string | null | undefined)[] =>
   rows().map(
@@ -96,17 +96,17 @@ const rowWords = (id: string): string | null | undefined =>
     .find((row) => row.dataset.stageId === id)!
     .querySelector('[data-slot="stage-row-words"]')?.textContent;
 const card = (id: string): HTMLElement =>
-  container.querySelector<HTMLElement>(
+  document.querySelector<HTMLElement>(
     `[data-slot="stage-journey"] [data-slot="stage-card"][data-stage-id="${id}"]`,
   )!;
 const fieldIssues = (tone: 'error' | 'warning'): string[] =>
   [
-    ...container.querySelectorAll(
+    ...document.querySelectorAll(
       `[data-slot="stage-field-issue"][data-tone="${tone}"]`,
     ),
   ].map((issue) => issue.textContent);
 const field = (label: string): HTMLInputElement | HTMLTextAreaElement => {
-  const htmlFor = [...container.querySelectorAll('label')].find(
+  const htmlFor = [...document.querySelectorAll('label')].find(
     (l) => l.textContent === label,
   )!.htmlFor;
   return document.getElementById(htmlFor) as
@@ -114,7 +114,7 @@ const field = (label: string): HTMLInputElement | HTMLTextAreaElement => {
 };
 const doneButton = (): HTMLButtonElement => button('Done')!;
 const errorAlert = (): Element | null =>
-  container.querySelector('[role="alert"]');
+  document.querySelector('[role="alert"]');
 
 function pickRowMenuItem(rowIndex: number, label: string): void {
   click(rows()[rowIndex]!.querySelector('[data-menu-trigger]'));
@@ -131,7 +131,7 @@ function lastSaved(): TeamStage[] {
 describe('StagesDialog', () => {
   it('adds stages one after another as a line, with stable ids minted from their titles', () => {
     render(undefined);
-    expect(container.textContent).toContain('No stages yet');
+    expect(document.body.textContent).toContain('No stages yet');
 
     click(button('Add stage'));
     type(field('Title'), 'Fix the Build');
@@ -172,7 +172,7 @@ describe('StagesDialog', () => {
     render(LINE);
     const addMember = (name: string): void => {
       click(
-        container.querySelector<HTMLElement>(
+        document.querySelector<HTMLElement>(
           'button[aria-label="Add a responsible member"]',
         ),
       );
@@ -184,28 +184,28 @@ describe('StagesDialog', () => {
     };
     const listed = (): (string | undefined)[] =>
       [
-        ...container.querySelectorAll<HTMLElement>(
+        ...document.querySelectorAll<HTMLElement>(
           '[data-slot="responsible-row"]',
         ),
       ].map((row) => row.dataset.memberId);
-    expect(container.textContent).toContain('No one in particular');
+    expect(document.body.textContent).toContain('No one in particular');
 
     addMember('Reviewer');
     addMember('Coder');
     expect(listed()).toEqual(['reviewer', 'coder']);
     expect(
-      container.querySelector('[data-slot="responsible-row"]')!.textContent,
+      document.querySelector('[data-slot="responsible-row"]')!.textContent,
     ).toContain('leads');
     expect(rowWords('investigate')).toBe('start · Reviewer');
 
-    click(container.querySelector('button[aria-label="Move Coder up"]'));
+    click(document.querySelector('button[aria-label="Move Coder up"]'));
     expect(listed()).toEqual(['coder', 'reviewer']);
     expect(rowWords('investigate')).toBe('start · Coder');
     click(doneButton());
     expect(lastSaved()[0]!.responsible).toEqual(['coder', 'reviewer']);
 
-    click(container.querySelector('button[aria-label="Remove Coder"]'));
-    click(container.querySelector('button[aria-label="Remove Reviewer"]'));
+    click(document.querySelector('button[aria-label="Remove Coder"]'));
+    click(document.querySelector('button[aria-label="Remove Reviewer"]'));
     click(doneButton());
     expect('responsible' in lastSaved()[0]!).toBe(false);
   });
@@ -213,7 +213,7 @@ describe('StagesDialog', () => {
   it('offers only the members not already responsible', () => {
     render([{ ...LINE[0]!, responsible: ['coder'] }, LINE[1]!]);
     click(
-      container.querySelector<HTMLElement>(
+      document.querySelector<HTMLElement>(
         'button[aria-label="Add a responsible member"]',
       ),
     );
@@ -264,11 +264,11 @@ describe('StagesDialog', () => {
       { id: 'c', title: 'C', goal: 'c' },
     ]);
     const hint = (): string =>
-      container.querySelector('[data-slot="stage-next-hint"]')!.textContent;
+      document.querySelector('[data-slot="stage-next-hint"]')!.textContent;
     expect(hint()).toBe('Then B');
 
     const next = (name: string): HTMLButtonElement =>
-      [...container.querySelectorAll<HTMLButtonElement>('[aria-pressed]')].find(
+      [...document.querySelectorAll<HTMLButtonElement>('[aria-pressed]')].find(
         (b) => b.textContent === name,
       )!;
     expect(rowWords('a')).toBe('start');
@@ -288,7 +288,7 @@ describe('StagesDialog', () => {
   it('names a next stage that does not exist by its id', () => {
     render([{ id: 'a', title: 'A', goal: 'a', next: ['ghost'] }]);
     expect(
-      container.querySelector('[data-slot="stage-next-hint"]')!.textContent,
+      document.querySelector('[data-slot="stage-next-hint"]')!.textContent,
     ).toBe('Then ghost');
     expect(errorAlert()).toBeNull();
     click(doneButton());
@@ -303,11 +303,11 @@ describe('StagesDialog', () => {
       { id: 'b', title: 'B', goal: 'b', next: ['c'] },
       { id: 'c', title: 'C', goal: 'c', next: ['b'] },
     ]);
-    expect(container.querySelector('[data-slot="stage-errors"]')).toBeNull();
+    expect(document.querySelector('[data-slot="stage-errors"]')).toBeNull();
     expect(rowWords('b')).toBeUndefined();
     click(doneButton());
     expect(onSave).not.toHaveBeenCalled();
-    const alert = container.querySelector('[data-slot="stage-errors"]')!;
+    const alert = document.querySelector('[data-slot="stage-errors"]')!;
     expect(alert.getAttribute('role')).toBe('alert');
     expect(alert.textContent).toContain('Error');
     expect(alert.textContent).toContain('B: The stages loop back');
@@ -319,12 +319,12 @@ describe('StagesDialog', () => {
     click(rows()[2]!.querySelector('button'));
     click(
       [
-        ...container.querySelectorAll<HTMLButtonElement>(
+        ...document.querySelectorAll<HTMLButtonElement>(
           '[aria-pressed="true"]',
         ),
       ].find((b) => b.textContent === 'B') ?? null,
     );
-    expect(container.querySelector('[data-slot="stage-errors"]')).toBeNull();
+    expect(document.querySelector('[data-slot="stage-errors"]')).toBeNull();
     click(doneButton());
     expect(lastSaved()).toHaveLength(3);
   });
@@ -352,7 +352,7 @@ describe('StagesDialog', () => {
     click(rows()[0]!.querySelector('button'));
     click(
       [
-        ...container.querySelectorAll<HTMLButtonElement>(
+        ...document.querySelectorAll<HTMLButtonElement>(
           '[aria-pressed="true"]',
         ),
       ].find((b) => b.textContent === 'Stage 2') ?? null,
@@ -360,7 +360,7 @@ describe('StagesDialog', () => {
     click(doneButton());
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(
-      container.querySelector('[data-slot="stage-errors"]')!.textContent,
+      document.querySelector('[data-slot="stage-errors"]')!.textContent,
     ).toContain('Only one stage may start');
   });
 
@@ -398,7 +398,7 @@ describe('StagesDialog', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(fieldIssues('error')).toEqual(['Error: A stage needs a goal']);
     const alert = errorAlert()!;
-    expect(alert).toBe(container.querySelector('[data-slot="stage-errors"]'));
+    expect(alert).toBe(document.querySelector('[data-slot="stage-errors"]'));
     expect(alert.textContent).toContain('Stage 3');
     expect(rowWords('stage-3')).toContain('error');
     expect(rowWords('stage-4')).toContain('error');
@@ -435,7 +435,7 @@ describe('StagesDialog', () => {
   it('writes how to work from the expandable field', () => {
     render(LINE);
     expect(
-      container.querySelector('button[aria-label="Expand How to work"]'),
+      document.querySelector('button[aria-label="Expand How to work"]'),
     ).not.toBeNull();
     type(field('How to work'), ' Find it ');
     click(doneButton());
@@ -449,12 +449,12 @@ describe('StagesDialog', () => {
       { id: 'twin-2', title: 'Twin', goal: 't' },
     ]);
     const options = (): string[] =>
-      [...container.querySelectorAll('[aria-pressed]')].map(
+      [...document.querySelectorAll('[aria-pressed]')].map(
         (b) => b.textContent,
       );
     expect(options()).toEqual(['Twin (twin-1)', 'Twin (twin-2)']);
     click(
-      [...container.querySelectorAll<HTMLButtonElement>('[aria-pressed]')].find(
+      [...document.querySelectorAll<HTMLButtonElement>('[aria-pressed]')].find(
         (b) => b.textContent === 'Twin (twin-2)',
       ) ?? null,
     );
@@ -467,7 +467,7 @@ describe('StagesDialog', () => {
       { id: 'a', title: 'A', goal: 'a', next: ['b'] },
       { id: 'b', title: 'B', goal: 'b', responsible: ['ghost'] },
     ]);
-    const warning = container.querySelector('[data-slot="stage-warnings"]')!;
+    const warning = document.querySelector('[data-slot="stage-warnings"]')!;
     expect(warning.textContent).toContain('Warning');
     expect(warning.textContent).toContain(
       "B: Stage 'b' names 'ghost' as responsible",
@@ -482,10 +482,10 @@ describe('StagesDialog', () => {
       ),
     ]);
     expect(
-      container.querySelector('[data-slot="responsible-row"]')!.textContent,
+      document.querySelector('[data-slot="responsible-row"]')!.textContent,
     ).toContain('ghost (not in this team)');
-    expect(container.querySelector('[data-slot="stage-warnings"]')).toBeNull();
-    expect(container.querySelector('[data-slot="stage-errors"]')).toBeNull();
+    expect(document.querySelector('[data-slot="stage-warnings"]')).toBeNull();
+    expect(document.querySelector('[data-slot="stage-errors"]')).toBeNull();
     click(doneButton());
     expect(lastSaved()[1]!.responsible).toEqual(['ghost']);
   });
@@ -529,7 +529,7 @@ describe('StagesDialog', () => {
   it('announces a move to assistive tech', () => {
     render(LINE);
     pickRowMenuItem(1, 'Move up');
-    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
       'Fix moved to position 1 of 2',
     );
   });

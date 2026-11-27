@@ -7,7 +7,6 @@ import {
   Shrink,
 } from 'lucide-react';
 import * as React from 'react';
-import { createPortal } from 'react-dom';
 import {
   type ReactZoomPanPinchContentRef,
   TransformComponent,
@@ -380,13 +379,6 @@ function useFullscreen(ref: React.RefObject<HTMLElement | null>): {
  * expensive part and already lives there, and a second implementation of it
  * would be the one that drifts.
  *
- * PORTALLED to `document.body`, which the other dialogs do not need. Every
- * other dialog is opened from a screen; this one is opened from a thumbnail
- * buried in a transcript, where two things bite: `position: fixed` is resolved
- * against the nearest ancestor carrying a `transform`/`filter`/`will-change`
- * rather than the viewport, and a markdown image sits inside the `<p>` the
- * renderer wrapped it in, which is no place for a dialog's markup.
- *
  * Zoom rides `react-zoom-pan-pinch` rather than a hand-rolled transform. The
  * part worth buying is not the `scale` — it is keeping the point under the
  * cursor fixed while the scale changes, and clamping the pan to the scaled
@@ -448,10 +440,11 @@ export function ImageViewer({
   if (!open) {
     return null;
   }
-  return createPortal(
+  return (
     <Dialog
       open
       onClose={onClose}
+      viewer
       title={
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="block truncate" title={title}>
@@ -549,8 +542,7 @@ export function ImageViewer({
           {description}
         </p>
       )}
-    </Dialog>,
-    document.body,
+    </Dialog>
   );
 }
 

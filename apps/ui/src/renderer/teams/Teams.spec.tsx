@@ -978,7 +978,7 @@ describe('Teams — reloading after the agent edits the file', () => {
     await endTurn();
 
     expect(memberIds()).toEqual(['lead', 'qa']);
-    expect(container.textContent).toContain(
+    expect(document.body.textContent).toContain(
       'Reloaded — the agent changed this team',
     );
   });
@@ -1038,8 +1038,8 @@ describe('Teams — edits made while the chat agent works', () => {
     await press('Back to teams');
 
     expect(inBuilder()).toBe(true);
-    expect(container.textContent).toContain('Leave without saving?');
-    expect(container.textContent).toContain(
+    expect(document.body.textContent).toContain('Leave without saving?');
+    expect(document.body.textContent).toContain(
       'The chat agent is still editing this team',
     );
     expect(saveTeam).not.toHaveBeenCalled();
@@ -1061,8 +1061,8 @@ describe('Teams — leaving the builder', () => {
     await press('Back to teams');
 
     expect(inBuilder()).toBe(true);
-    expect(container.textContent).toContain('the disk is full');
-    expect(container.textContent).toContain('Leave without saving?');
+    expect(document.body.textContent).toContain('the disk is full');
+    expect(document.body.textContent).toContain('Leave without saving?');
   });
 
   it('on a phone, keeps a back entry for the team after Leave without saving? is cancelled', async () => {
@@ -1088,7 +1088,7 @@ describe('Teams — leaving the builder', () => {
 
     await afterPopstate(() => history.back(), 'the platform back');
     await wait(50);
-    expect(container.textContent).toContain('Leave without saving?');
+    expect(document.body.textContent).toContain('Leave without saving?');
     expect(pageOfEntry()).toBeUndefined();
     await press('Cancel');
     await wait(50);
@@ -1310,7 +1310,7 @@ describe('Teams — the members', () => {
         (button) => button.textContent?.trim() === 'Remove member',
       ),
     ).toBe(false);
-    expect(container.textContent).toContain(
+    expect(document.body.textContent).toContain(
       'A team keeps at least one member.',
     );
   });
@@ -1483,7 +1483,7 @@ describe('Teams — a team the daemon would refuse', () => {
     await wait(900);
 
     expect(saveTeam).not.toHaveBeenCalled();
-    expect(container.textContent).toContain('A member needs a name.');
+    expect(document.body.textContent).toContain('A member needs a name.');
     expect(statusLine()).toBe('Not saved yet — fix the problems listed first');
 
     await type(container.querySelector('#member-name'), 'Boss');
@@ -1521,7 +1521,7 @@ describe('Teams — a team the daemon would refuse', () => {
     await press('Back to teams');
 
     expect(inBuilder()).toBe(true);
-    expect(container.textContent).toContain(
+    expect(document.body.textContent).toContain(
       'This team has problems the save would refuse',
     );
     expect(saveTeam).not.toHaveBeenCalled();
@@ -2512,7 +2512,7 @@ describe('Teams — the builder header', () => {
     await press('Delete team');
 
     expect(deleteTeam).not.toHaveBeenCalled();
-    expect(container.textContent).toContain('permanently?');
+    expect(document.body.textContent).toContain('permanently?');
 
     await press('Delete');
 
@@ -2535,7 +2535,7 @@ describe('Teams — deleting a team that keeps memories', () => {
     await press('Team actions');
     await press('Delete team');
 
-    expect(container.textContent).toContain('This team keeps 2 memories.');
+    expect(document.body.textContent).toContain('This team keeps 2 memories.');
     await press('Keep them for this team name');
     await press('Delete');
 
@@ -3018,7 +3018,7 @@ describe('Teams — a save over a file changed outside the builder', () => {
 
     expect(savedRequests()).toHaveLength(1);
     expect(savedRequests()[0]!.saveTeamDto.baseHash).toBe('loaded-1');
-    expect(container.textContent).toContain(
+    expect(document.body.textContent).toContain(
       'This team changed outside the builder',
     );
 
@@ -3029,7 +3029,7 @@ describe('Teams — a save over a file changed outside the builder', () => {
     const reads = getTeam.mock.calls.length;
     await press('Reload');
     expect(getTeam.mock.calls.length).toBe(reads + 1);
-    expect(container.textContent).not.toContain(
+    expect(document.body.textContent).not.toContain(
       'This team changed outside the builder',
     );
   });
@@ -3275,7 +3275,7 @@ describe('Teams — the team page', () => {
     });
     expect(selectedTab()).toBe('Memory');
     await wait(0);
-    expect(container.textContent).toContain('No team memories yet.');
+    expect(document.body.textContent).toContain('No team memories yet.');
 
     await act(async () => {
       document.activeElement!.dispatchEvent(
@@ -3283,7 +3283,7 @@ describe('Teams — the team page', () => {
       );
     });
     expect(selectedTab()).toBe('Statistics');
-    expect(container.textContent).toContain('No runs yet.');
+    expect(document.body.textContent).toContain('No runs yet.');
   });
 
   it('marks a member the daemon finds not set up with a corner badge whose panel holds the fix, and reads it with the MCP probe', async () => {

@@ -111,13 +111,15 @@ function render(
 
 /** The one button whose accessible name matches, or a failure naming what was found. */
 function button(name: string): HTMLButtonElement {
-  const found = [...container.querySelectorAll('button')].find(
+  const found = [...document.body.querySelectorAll('button')].find(
     (b) =>
       b.getAttribute('aria-label') === name || b.textContent?.trim() === name,
   );
   if (!found) {
     throw new Error(
-      `no button "${name}" — found: ${[...container.querySelectorAll('button')]
+      `no button "${name}" — found: ${[
+        ...document.body.querySelectorAll('button'),
+      ]
         .map((b) => b.getAttribute('aria-label') ?? b.textContent?.trim())
         .join(' | ')}`,
     );
@@ -145,8 +147,8 @@ describe('RunConfigPicker — list', () => {
   it('states the folder and branch a configuration opens', () => {
     render({ configs: [config({ branch: 'feat/x' })] });
 
-    expect(container.textContent).toContain('geniro-app');
-    expect(container.textContent).toContain('feat/x');
+    expect(document.body.textContent).toContain('geniro-app');
+    expect(document.body.textContent).toContain('feat/x');
   });
 
   it('deleting takes two presses — the first only arms it', () => {
@@ -164,7 +166,7 @@ describe('RunConfigPicker — list', () => {
   it('an empty set says so rather than showing a bare list', () => {
     render({ configs: [] });
 
-    expect(container.textContent).toContain('No configurations yet');
+    expect(document.body.textContent).toContain('No configurations yet');
   });
 });
 
@@ -182,7 +184,7 @@ describe('RunConfigPicker — editor', () => {
 
     // Cleared to whitespace through the real field, so the guard is exercised
     // on a value the user could actually produce.
-    const input = container.querySelector<HTMLInputElement>(
+    const input = document.body.querySelector<HTMLInputElement>(
       'input[aria-label="Configuration name"]',
     );
     act(() => {
@@ -196,7 +198,9 @@ describe('RunConfigPicker — editor', () => {
     click(button('Save'));
 
     expect(onSave).not.toHaveBeenCalled();
-    expect(container.textContent).toContain('Give the configuration a name');
+    expect(document.body.textContent).toContain(
+      'Give the configuration a name',
+    );
   });
 
   it('clears the refusal once the save it refused succeeds', () => {
@@ -204,7 +208,7 @@ describe('RunConfigPicker — editor', () => {
     // sits over the very row that disproves it — telling the user to name a
     // configuration whose name is on screen beside it.
     const { onSave } = openEditor();
-    const input = container.querySelector<HTMLInputElement>(
+    const input = document.body.querySelector<HTMLInputElement>(
       'input[aria-label="Configuration name"]',
     );
     const type = (value: string): void => {
@@ -219,13 +223,15 @@ describe('RunConfigPicker — editor', () => {
 
     type('   ');
     click(button('Save'));
-    expect(container.textContent).toContain('Give the configuration a name');
+    expect(document.body.textContent).toContain(
+      'Give the configuration a name',
+    );
 
     type('Named at last');
     click(button('Save'));
 
     expect(onSave).toHaveBeenCalledTimes(1);
-    expect(container.textContent).not.toContain(
+    expect(document.body.textContent).not.toContain(
       'Give the configuration a name',
     );
   });
@@ -234,7 +240,7 @@ describe('RunConfigPicker — editor', () => {
     // Same surface, other exit: abandoning the edit leaves the complaint about
     // it standing over the list.
     openEditor();
-    const input = container.querySelector<HTMLInputElement>(
+    const input = document.body.querySelector<HTMLInputElement>(
       'input[aria-label="Configuration name"]',
     );
     act(() => {
@@ -245,11 +251,13 @@ describe('RunConfigPicker — editor', () => {
       input?.dispatchEvent(new Event('input', { bubbles: true }));
     });
     click(button('Save'));
-    expect(container.textContent).toContain('Give the configuration a name');
+    expect(document.body.textContent).toContain(
+      'Give the configuration a name',
+    );
 
     click(button('Cancel'));
 
-    expect(container.textContent).not.toContain(
+    expect(document.body.textContent).not.toContain(
       'Give the configuration a name',
     );
   });
@@ -257,7 +265,7 @@ describe('RunConfigPicker — editor', () => {
   it('saves the edited draft back against the same id', () => {
     const { onSave } = openEditor();
 
-    const input = container.querySelector<HTMLInputElement>(
+    const input = document.body.querySelector<HTMLInputElement>(
       'input[aria-label="Configuration name"]',
     );
     expect(input).not.toBeNull();
@@ -294,7 +302,7 @@ describe('RunConfigPicker — editor', () => {
     const { onSave } = render({ captureCurrent: () => captured });
 
     click(button('New configuration'));
-    const input = container.querySelector<HTMLInputElement>(
+    const input = document.body.querySelector<HTMLInputElement>(
       'input[aria-label="Configuration name"]',
     );
     act(() => {
@@ -322,7 +330,7 @@ describe('RunConfigPicker — editor', () => {
     const { onSave } = render({ captureCurrent: () => null });
 
     click(button('New configuration'));
-    const input = container.querySelector<HTMLInputElement>(
+    const input = document.body.querySelector<HTMLInputElement>(
       'input[aria-label="Configuration name"]',
     );
     act(() => {
@@ -336,12 +344,12 @@ describe('RunConfigPicker — editor', () => {
     click(button('Create'));
 
     expect(onSave).not.toHaveBeenCalled();
-    expect(container.textContent).toContain('Choose the folder');
+    expect(document.body.textContent).toContain('Choose the folder');
   });
 });
 
 function typeName(value: string): void {
-  const input = container.querySelector<HTMLInputElement>(
+  const input = document.body.querySelector<HTMLInputElement>(
     'input[aria-label="Configuration name"]',
   );
   act(() => {
@@ -376,7 +384,7 @@ describe('RunConfigPicker — a configuration belongs to a project', () => {
     click(button('Create'));
 
     expect(onSave).not.toHaveBeenCalled();
-    expect(container.textContent).toContain(
+    expect(document.body.textContent).toContain(
       'Choose the project this configuration belongs to.',
     );
   });
@@ -387,7 +395,7 @@ describe('RunConfigPicker — a configuration belongs to a project', () => {
     typeName('From the project');
     click(button('Project this configuration binds its runs to'));
     click(
-      [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      [...document.body.querySelectorAll<HTMLElement>('[role="option"]')].find(
         (option) => option.textContent?.trim() === 'Shop',
       )!,
     );
@@ -408,7 +416,7 @@ describe('RunConfigPicker — which surface an open lands on', () => {
     rerender({ open: true, openTo: 'new' });
 
     expect(
-      container.querySelector('input[aria-label="Configuration name"]'),
+      document.body.querySelector('input[aria-label="Configuration name"]'),
     ).not.toBeNull();
     expect(() => button('Create')).not.toThrow();
   });
@@ -433,7 +441,7 @@ describe('RunConfigPicker — which surface an open lands on', () => {
       }),
     });
 
-    expect(container.textContent).toContain('seeded');
+    expect(document.body.textContent).toContain('seeded');
   });
 
   it('openTo="list" lands on the list, editing nothing', () => {
@@ -441,7 +449,7 @@ describe('RunConfigPicker — which surface an open lands on', () => {
     rerender({ open: true, openTo: 'list' });
 
     expect(
-      container.querySelector('input[aria-label="Configuration name"]'),
+      document.body.querySelector('input[aria-label="Configuration name"]'),
     ).toBeNull();
     expect(() => button('Start a chat set up as “Geniro app”')).not.toThrow();
   });
@@ -466,14 +474,14 @@ describe('RunConfigPicker — state that must not survive a reopen', () => {
     const { rerender } = render();
     click(button('Edit Geniro app'));
     expect(
-      container.querySelector('input[aria-label="Configuration name"]'),
+      document.body.querySelector('input[aria-label="Configuration name"]'),
     ).not.toBeNull();
 
     rerender({ open: false });
     rerender({ open: true });
 
     expect(
-      container.querySelector('input[aria-label="Configuration name"]'),
+      document.body.querySelector('input[aria-label="Configuration name"]'),
     ).toBeNull();
   });
 
@@ -500,7 +508,7 @@ describe('RunConfigPicker — editor guards', () => {
     click(button('Save'));
 
     expect(onSave).not.toHaveBeenCalled();
-    expect(container.textContent).toContain(
+    expect(document.body.textContent).toContain(
       `keep it to ${MAX_RUN_CONFIG_NAME}`,
     );
   });
@@ -530,7 +538,9 @@ describe('RunConfigPicker — editor guards', () => {
     click(button('Create'));
 
     expect(onSave).not.toHaveBeenCalled();
-    expect(container.textContent).toContain(`already have ${MAX_RUN_CONFIGS}`);
+    expect(document.body.textContent).toContain(
+      `already have ${MAX_RUN_CONFIGS}`,
+    );
   });
 
   it('still allows EDITING an existing configuration when the list is full', () => {
@@ -562,15 +572,15 @@ describe('RunConfigPicker — editor guards', () => {
     const { onSave } = render({ configs: [config({ branch: 'feat/x' })] });
     click(button('Edit Geniro app'));
 
-    const browse = [...container.querySelectorAll('button')].find(
+    const browse = [...document.body.querySelectorAll('button')].find(
       (b) => b.getAttribute('aria-label') === 'Folder for new chats',
     );
     act(() => {
       browse?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    const browseRow = [...container.querySelectorAll('[role="option"]')].find(
-      (o) => o.textContent?.includes('Choose folder'),
-    );
+    const browseRow = [
+      ...document.body.querySelectorAll('[role="option"]'),
+    ].find((o) => o.textContent?.includes('Choose folder'));
     await act(async () => {
       browseRow?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
@@ -586,7 +596,7 @@ describe('RunConfigPicker — editor guards', () => {
   function pickModel(rowText: string): void {
     click(button('Model'));
     const row = [
-      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+      ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
     ].find((o) => o.textContent?.trim() === rowText);
     if (!row) {
       throw new Error(`no "${rowText}" row under Model`);
@@ -600,7 +610,7 @@ describe('RunConfigPicker — editor guards', () => {
 
     click(button('Project this configuration binds its runs to'));
     const row = [
-      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+      ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
     ].find((option) => option.textContent?.trim() === 'Shop');
     click(row!);
     click(button('Save'));
@@ -618,7 +628,7 @@ describe('RunConfigPicker — editor guards', () => {
       ],
     });
 
-    const rows = [...container.querySelectorAll('li')].map(
+    const rows = [...document.body.querySelectorAll('li')].map(
       (row) => row.textContent ?? '',
     );
     expect(rows[0]).toContain('Billing');
@@ -683,7 +693,7 @@ describe('RunConfigPicker — editor guards', () => {
     click(button('Edit Geniro app'));
 
     click(button('Agent config directory for new chats'));
-    const rows = [...container.querySelectorAll('[role="option"]')].map(
+    const rows = [...document.body.querySelectorAll('[role="option"]')].map(
       (o) => o.textContent ?? '',
     );
     expect(rows.some((text) => text.includes('Codex work'))).toBe(true);
@@ -711,7 +721,7 @@ describe('RunConfigPicker — editor guards', () => {
 
     click(button('Agent or team this configuration starts'));
     const row = [
-      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+      ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
     ].find((o) => o.textContent?.includes('Review team'));
     if (!row) {
       throw new Error('no "Review team" row in the target picker');
@@ -739,7 +749,7 @@ describe('RunConfigPicker — reordering', () => {
 
   /** The row `<li>` of the configuration with this name. */
   function row(name: string): HTMLLIElement {
-    const li = [...container.querySelectorAll('li')].find((el) =>
+    const li = [...document.body.querySelectorAll('li')].find((el) =>
       el.textContent?.includes(name),
     );
     if (!li) {
@@ -750,7 +760,7 @@ describe('RunConfigPicker — reordering', () => {
 
   /** Names of the rows, top to bottom, as drawn. */
   function order(): string[] {
-    return [...container.querySelectorAll('li')].map(
+    return [...document.body.querySelectorAll('li')].map(
       (li) => li.querySelector('span')?.textContent ?? '',
     );
   }
@@ -875,11 +885,11 @@ describe('RunConfigPicker — reordering', () => {
 
   it('offers no grip and no drag without a reorder handler, or with one row', () => {
     render({ configs: three });
-    expect(container.querySelector('[aria-label^="Reorder"]')).toBeNull();
+    expect(document.body.querySelector('[aria-label^="Reorder"]')).toBeNull();
     expect(row('Alpha').draggable).toBe(false);
 
     render({ configs: [config()], onReorder: vi.fn() });
-    expect(container.querySelector('[aria-label^="Reorder"]')).toBeNull();
+    expect(document.body.querySelector('[aria-label^="Reorder"]')).toBeNull();
   });
 
   it('a row with its delete armed cannot be picked up', () => {

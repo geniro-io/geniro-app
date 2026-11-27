@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { afterPopstate } from '../__tests__/after-popstate';
 import { ArtifactCard } from './artifact-block';
 import { ArtifactShareContext } from './artifact-share';
 import {
@@ -27,6 +28,7 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  history.replaceState(null, '');
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -345,9 +347,7 @@ describe('ArtifactCard', () => {
     );
     expect(close).not.toBeNull();
 
-    await act(async () => {
-      close!.click();
-    });
+    await afterPopstate(() => close!.click(), 'the ✕');
 
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });

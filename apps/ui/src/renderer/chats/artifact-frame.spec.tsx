@@ -6,6 +6,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { afterPopstate } from '../__tests__/after-popstate';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import { pushEscapeLayer } from '../components/ui/escape-layers';
 import {
@@ -389,14 +390,17 @@ describe('ArtifactFrame — a picture the page asks the host to show', () => {
   });
 
   it('closes the viewer on Escape, which this document sees once the viewer has focus', async () => {
+    history.replaceState(null, '');
     await render();
     focusFrame();
     await post({ type: 'picture', src: PICTURE, alt: 'Before' });
-    await act(async () => {
-      document.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
-      );
-    });
+    await afterPopstate(
+      () =>
+        document.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+        ),
+      'Escape',
+    );
     expect(viewer()).toBeNull();
   });
 

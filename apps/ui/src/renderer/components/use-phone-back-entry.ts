@@ -64,10 +64,14 @@ function entryState(): EntryState {
  * own hash write and navigate off the tab just chosen. When the page opens
  * again while that entry is still current (or after a reload onto it), it
  * ADOPTS the entry rather than pushing a second one, so stale entries never
- * pile up into back presses that do nothing.
+ * pile up into back presses that do nothing. An entry another open page of the
+ * same kind still holds is never adopted: a page opened over it (a full-screen
+ * dialog over another) pushes its own, so each back closes one.
  *
  * Pass `open` already gated on the phone width and on the page being on
  * screen, so a hidden view never holds an entry another view's back would pop.
+ * A full-screen `Dialog` is the exception: it covers every view at any width,
+ * so it holds its entry for as long as it is open (owner `full-screen-dialog`).
  * `owner` names the page kind: an entry is adopted only by the kind that
  * pushed it, or a Settings section opened by a jump from the chat composer
  * would adopt the composer's entry and pop back to Chats. A page that other
@@ -139,7 +143,11 @@ export function usePhoneBackEntry(
         typeof adopted === 'string' && isStacked(stacked, adopted)
           ? stack.findLast((token) => token.startsWith(`${owner}:`))
           : undefined;
-      if (typeof adopted === 'string' && adopted.startsWith(`${owner}:`)) {
+      if (
+        typeof adopted === 'string' &&
+        adopted.startsWith(`${owner}:`) &&
+        (!held.has(adopted) || tokenRef.current === adopted)
+      ) {
         hold(adopted);
       } else if (under !== undefined && typeof adopted === 'string') {
         aboveRef.current = adopted;

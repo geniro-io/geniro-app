@@ -5,6 +5,7 @@ import { counterZoomStyle } from './css-zoom';
 import { pushEscapeLayer } from './escape-layers';
 import { closeOnFrameFocus } from './frame-focus';
 import { MenuAnchorContext } from './menu-anchor';
+import { isInModalAbove } from './modal-above';
 import { showInTopLayer } from './top-layer';
 import { cn } from './utils';
 
@@ -233,7 +234,12 @@ export function Popover({
     const onPointerDown = (event: MouseEvent): void => {
       const panel = panelRef.current;
       const target = event.target as Node | null;
-      if (!panel || !target || panel.contains(target)) {
+      if (
+        !panel ||
+        !target ||
+        panel.contains(target) ||
+        isInModalAbove(panel, target)
+      ) {
         return;
       }
       if (!triggerRef?.current?.contains(target)) {

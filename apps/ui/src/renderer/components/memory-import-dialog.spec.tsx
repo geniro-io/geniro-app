@@ -53,14 +53,14 @@ function element(props: Props): React.ReactElement {
   );
 }
 
-function render(props: Props = {}): HTMLDivElement {
+function render(props: Props = {}): HTMLElement {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
     root!.render(element(props));
   });
-  return container;
+  return document.body;
 }
 
 function rerender(props: Props): void {

@@ -36,6 +36,7 @@ export function WhatsNewDialog({
       open={open}
       onClose={onClose}
       title="What’s new in Geniro"
+      viewer
       className="h-full max-w-none"
       flush>
       <div data-slot="whats-new" className="flex h-full flex-col">

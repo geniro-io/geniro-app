@@ -54,7 +54,7 @@ function openChanges(): Element {
       ) as HTMLButtonElement
     ).click();
   });
-  return container.querySelector('[data-slot="member-changes"]')!;
+  return document.querySelector('[data-slot="member-changes"]')!;
 }
 
 function figure(
@@ -215,7 +215,7 @@ describe('MemberPerformance — reliability, changes and judges', () => {
   it('keeps the changes behind a button and lists each one in its popup with who made it, the measured effect and the figures that moved', () => {
     render(REVIEWER);
 
-    expect(container.querySelector('[data-slot="member-change"]')).toBeNull();
+    expect(document.querySelector('[data-slot="member-change"]')).toBeNull();
     expect(
       container.querySelector('[data-slot="member-changes-open"]')!.textContent,
     ).toBe('1 change');

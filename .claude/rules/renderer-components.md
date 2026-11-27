@@ -29,7 +29,7 @@ Every styled element goes through the layers in order: token → primitive → s
 - Control-chip look: `chip`. `select`'s `ghost` variant is built from it; a trailing `ChipChevron` marks a picker, so never put one on a static chip.
 - Dropdowns: `select`, never a native `<select>` (its macOS menu ignores tokens and is invisible to the DOM). Pass `groups`, not `<option>` children; tests open `[data-menu-trigger]` and read `[role="option"]`.
 - Always-visible mutually exclusive options: `segmented-control` — only when the choice is the screen's subject. A filter that narrows what is already shown goes behind a trigger (`Menu`).
-- Images the user looks at: `image-viewer` (built on `dialog`, portalled). Use `ZoomableImage`; a caller that controls which picture shows renders `ImageViewer` with `ZOOMABLE_TRIGGER_CLASS` on its opener. A bare `<img>` is only for chrome. Never add a second lightbox.
+- Images the user looks at: `image-viewer` (built on `dialog`, which portals every dialog to the body). Use `ZoomableImage`; a caller that controls which picture shows renders `ImageViewer` with `ZOOMABLE_TRIGGER_CLASS` on its opener. A bare `<img>` is only for chrome. Never add a second lightbox.
 - Command output: `ansi-text` over the `ansi.ts` parser. Colours come from `--ansi-*` tokens (brightness → `--ansi-bright-*`), never from the stream or computed in TypeScript.
 - Pickable answer options: `option-list`, whose `arity` (`many` / `one` / `none`) decides the drawing. Never `chip` (labels can be sentences).
 - Dismissible error strip: `error-banner`. `error-text` alone is for a form field, where typing clears it.

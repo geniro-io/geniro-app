@@ -1506,7 +1506,9 @@ describe('the column surface', () => {
       runButton(el).click();
     });
     if (prompt !== '') {
-      const box = el.querySelector('#run-task-prompt') as HTMLTextAreaElement;
+      const box = document.querySelector(
+        '#run-task-prompt',
+      ) as HTMLTextAreaElement;
       const setValue = Object.getOwnPropertyDescriptor(
         HTMLTextAreaElement.prototype,
         'value',
@@ -1517,7 +1519,7 @@ describe('the column surface', () => {
       });
     }
     const confirm = [
-      ...el.querySelectorAll<HTMLButtonElement>(
+      ...document.querySelectorAll<HTMLButtonElement>(
         '[data-slot="run-task"] button',
       ),
     ].find((node) => (node.textContent ?? '').trim() === 'Run task')!;
@@ -1557,7 +1559,7 @@ describe('the column surface', () => {
       runButton(el).click();
     });
 
-    expect(el.querySelector('[data-slot="run-task"]')).not.toBeNull();
+    expect(document.querySelector('[data-slot="run-task"]')).not.toBeNull();
     expect(window.geniro.startTaskRun).not.toHaveBeenCalled();
   });
 

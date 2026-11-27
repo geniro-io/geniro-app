@@ -154,11 +154,11 @@ async function open(): Promise<void> {
 }
 
 function olderButton(): HTMLButtonElement | null {
-  return container.querySelector('[data-slot="delegate-steps-older-load"]');
+  return document.querySelector('[data-slot="delegate-steps-older-load"]');
 }
 
 function windowNote(): string | null | undefined {
-  return container.querySelector('[data-slot="subagent-window-note"]')
+  return document.querySelector('[data-slot="subagent-window-note"]')
     ?.textContent;
 }
 

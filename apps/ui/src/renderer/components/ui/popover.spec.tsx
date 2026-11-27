@@ -7,7 +7,7 @@ import { stubCssZoom } from '../../__tests__/stub-css-zoom';
 import { stubTopLayer } from '../../__tests__/stub-top-layer';
 import { Dialog } from './dialog';
 import { Menu } from './menu';
-import { Popover } from './popover';
+import { Popover, POPOVER_PANEL_SELECTOR } from './popover';
 
 /**
  * The `anchor` contract, and only that.
@@ -522,6 +522,77 @@ describe('Popover — focus entering a frame', () => {
     blurInto(null);
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('Popover — a dialog opened from inside it', () => {
+  function press(target: Element | null): void {
+    act(() => {
+      target?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+  }
+
+  function Hosting({ onClose }: { onClose: () => void }): React.JSX.Element {
+    return (
+      <>
+        <button type="button">elsewhere</button>
+        <Popover open onClose={onClose} label="Panel">
+          <Dialog open onClose={vi.fn()} title="Page">
+            <input aria-label="Field in the dialog" />
+            <iframe title="page" />
+          </Dialog>
+        </Popover>
+      </>
+    );
+  }
+
+  it('stays open on a press inside that dialog, which lives in the body', () => {
+    const onClose = vi.fn();
+    render(<Hosting onClose={onClose} />);
+    const field = document.querySelector('[aria-label="Field in the dialog"]');
+
+    expect(field?.closest(POPOVER_PANEL_SELECTOR)).toBeNull();
+    press(field);
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('stays open when focus enters a frame in that dialog', () => {
+    const onClose = vi.fn();
+    render(<Hosting onClose={onClose} />);
+
+    act(() => {
+      document.querySelector<HTMLIFrameElement>('iframe')?.focus();
+      window.dispatchEvent(new Event('blur'));
+    });
+
+    expect(document.activeElement?.tagName).toBe('IFRAME');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('still closes on a press outside both', () => {
+    const onClose = vi.fn();
+    const container = render(<Hosting onClose={onClose} />);
+
+    press(container.querySelector('button'));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('still closes on a press elsewhere in a dialog that holds the popover', () => {
+    const onClose = vi.fn();
+    render(
+      <Dialog open onClose={vi.fn()} title="Outer">
+        <input aria-label="Outer field" />
+        <Popover open onClose={onClose} label="Panel">
+          Body
+        </Popover>
+      </Dialog>,
+    );
+
+    press(document.querySelector('[aria-label="Outer field"]'));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -10,6 +10,7 @@ import type {
   GeniroApi,
 } from '../../../shared/contracts';
 import { createPreloadStub } from '../../__fixtures__/preload-stub';
+import { afterPopstate } from '../../__tests__/after-popstate';
 import { stubResizeObserver } from '../../__tests__/stub-resize-observer';
 import { Dialog } from '../../components/ui/dialog';
 import { readThreadFlag, ThreadUiMemoryContext } from '../thread-ui-memory';
@@ -156,7 +157,7 @@ async function render(element: React.ReactElement): Promise<void> {
 }
 
 function button(label: string): HTMLButtonElement {
-  const found = [...container.querySelectorAll('button')].find(
+  const found = [...document.querySelectorAll('button')].find(
     (candidate) =>
       candidate.getAttribute('aria-label') === label ||
       candidate.textContent?.trim() === label,
@@ -785,6 +786,10 @@ describe('BrowserColumn — full screen', () => {
     </ThreadUiMemoryContext.Provider>
   );
 
+  beforeEach(() => {
+    history.replaceState(null, '');
+  });
+
   async function openPane(): Promise<void> {
     await render(column());
     act(() => {
@@ -806,12 +811,12 @@ describe('BrowserColumn — full screen', () => {
     capture.mockClear();
     await act(async () => option('Open full screen')!.click());
 
-    const dialog = container.querySelector('[role="dialog"]');
+    const dialog = document.querySelector('[role="dialog"]');
     expect(
       dialog?.querySelector('[data-slot="browser-full-screen"]'),
     ).not.toBeNull();
     expect(
-      container.querySelectorAll('[data-slot="browser-pane"]'),
+      document.querySelectorAll('[data-slot="browser-pane"]'),
     ).toHaveLength(1);
     expect(capture).not.toHaveBeenCalled();
     expect(setBounds).toHaveBeenLastCalledWith(RUN, {
@@ -824,12 +829,10 @@ describe('BrowserColumn — full screen', () => {
       dialog?.querySelector('button[aria-label="Close browser"]'),
     ).toBeNull();
 
-    await act(async () => button('Close').click());
+    await afterPopstate(() => button('Close').click(), 'the ✕');
 
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
-    expect(
-      container.querySelector('[data-slot="browser-pane"]'),
-    ).not.toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[data-slot="browser-pane"]')).not.toBeNull();
   });
 
   it('still hides the page behind a menu opened over the full-screen view', async () => {

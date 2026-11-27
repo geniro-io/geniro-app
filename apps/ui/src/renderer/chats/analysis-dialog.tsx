@@ -106,6 +106,7 @@ export function AnalysisDialog({
     <Dialog
       open={sourceId !== null}
       onClose={onClose}
+      viewer
       className="h-full max-w-5xl"
       flush
       title={

@@ -55,7 +55,7 @@ function render(onChange = vi.fn(), value = 'You are the Reviewer.'): void {
 }
 
 function inlineField(): HTMLTextAreaElement {
-  const el = container.querySelector<HTMLTextAreaElement>('#node-role');
+  const el = document.body.querySelector<HTMLTextAreaElement>('#node-role');
   if (!el) {
     throw new Error('no inline textarea rendered');
   }
@@ -63,7 +63,7 @@ function inlineField(): HTMLTextAreaElement {
 }
 
 function expandButton(): HTMLButtonElement {
-  const el = container.querySelector<HTMLButtonElement>(
+  const el = document.body.querySelector<HTMLButtonElement>(
     '[aria-label="Expand Role / system prompt"]',
   );
   if (!el) {
@@ -73,7 +73,7 @@ function expandButton(): HTMLButtonElement {
 }
 
 function popupEditor(): HTMLTextAreaElement | null {
-  return container.querySelector<HTMLTextAreaElement>(
+  return document.body.querySelector<HTMLTextAreaElement>(
     '[data-testid="md-editor"]',
   );
 }
@@ -96,7 +96,7 @@ function click(el: HTMLElement): void {
 
 function button(label: string): HTMLButtonElement {
   const found = [
-    ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ...document.body.querySelectorAll<HTMLButtonElement>('button'),
   ].find((el) => el.textContent?.trim() === label);
   if (!found) {
     throw new Error(`no "${label}" button`);

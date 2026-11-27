@@ -51,7 +51,7 @@ function mount(
   /** Default [] mirrors `AgentIdentityContext`'s own default — no Provider. */
   identities: readonly AgentIdentityCapability[] = [],
 ): {
-  container: HTMLDivElement;
+  container: HTMLElement;
   onResume: ReturnType<typeof vi.fn>;
 } {
   const onResume = vi.fn();
@@ -80,7 +80,7 @@ function mount(
   act(() => {
     root!.render(element);
   });
-  return { container, onResume };
+  return { container: document.body, onResume };
 }
 
 /** The agent menu's rows — opened from its trigger, real DOM like every menu here. */

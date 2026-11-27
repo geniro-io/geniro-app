@@ -7,6 +7,7 @@ import { pointOf, usePointerGrace } from '../use-pointer-grace';
 import { counterZoomStyle } from './css-zoom';
 import { closeOnFrameFocus } from './frame-focus';
 import { MenuAnchorContext } from './menu-anchor';
+import { isInModalAbove } from './modal-above';
 import { PALETTE_BORDER_CLASS } from './palette';
 import { popoverSurface } from './popover';
 import { cn } from './utils';
@@ -535,7 +536,12 @@ export function Menu({
     const onPointerDown = (event: MouseEvent): void => {
       const panel = panelRef.current;
       const target = event.target as Node | null;
-      if (panel && target && !panel.contains(target)) {
+      if (
+        panel &&
+        target &&
+        !panel.contains(target) &&
+        !isInModalAbove(panel, target)
+      ) {
         // The caller's own ref when it gave one — a floating panel may not sit
         // beside its trigger in the DOM, and `parentElement` is a guess that
         // finds the first chip of whatever wrapper it lands in.

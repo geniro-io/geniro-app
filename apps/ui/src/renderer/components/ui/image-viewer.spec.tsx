@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { afterPopstate } from '../../__tests__/after-popstate';
 import { stubResizeObserver } from '../../__tests__/stub-resize-observer';
 import { ZoomableImage, zoomControlState } from './image-viewer';
 
@@ -21,6 +22,7 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  history.replaceState(null, '');
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -323,5 +325,41 @@ describe('an image the user can open', () => {
     press(thumbnail()!);
 
     expect(document.body.textContent).toContain('02-transcript.png');
+  });
+});
+
+describe('an image opened straight from the transcript', () => {
+  const close = (): HTMLButtonElement | null =>
+    document.body.querySelector('[aria-label="Close"]');
+
+  it('offers a 44px ✕ inside the safe area and closes on the platform’s Back', async () => {
+    render(<ZoomableImage src={SRC} alt="Before" />);
+    await act(async () => {
+      press(thumbnail()!);
+    });
+
+    expect(close()?.className).toContain('size-[44px]');
+    expect(document.body.querySelector('[role="dialog"]')!.className).toContain(
+      'env(safe-area-inset-top)',
+    );
+
+    await afterPopstate(() => history.back(), 'the platform back');
+
+    expect(viewer()).toBeNull();
+  });
+
+  it('closes on Escape through the same history entry', async () => {
+    render(<ZoomableImage src={SRC} alt="Before" />);
+    await act(async () => {
+      press(thumbnail()!);
+    });
+
+    await afterPopstate(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    }, 'Escape');
+
+    expect(viewer()).toBeNull();
   });
 });

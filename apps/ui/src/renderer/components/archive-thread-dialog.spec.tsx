@@ -296,16 +296,18 @@ afterEach(() => {
 
 function button(label: string): HTMLButtonElement {
   const found = [
-    ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ...document.body.querySelectorAll<HTMLButtonElement>('button'),
   ].find((el) => el.textContent?.trim() === label);
   if (!found) {
-    throw new Error(`no "${label}" button (saw: ${container.textContent})`);
+    throw new Error(`no "${label}" button (saw: ${document.body.textContent})`);
   }
   return found;
 }
 
 function checkbox(): HTMLInputElement | null {
-  return container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  return document.body.querySelector<HTMLInputElement>(
+    'input[type="checkbox"]',
+  );
 }
 
 function renderDialog({
@@ -344,32 +346,36 @@ function renderDialog({
 describe('ArchiveThreadDialog', () => {
   function stillRunning(): string[] {
     return [
-      ...container.querySelectorAll('[data-slot="archive-still-running"] li'),
+      ...document.body.querySelectorAll(
+        '[data-slot="archive-still-running"] li',
+      ),
     ].map((item) => item.textContent ?? '');
   }
 
   it('lists the turn a running chat stops', () => {
     renderDialog({ target: RUNNING_CHAT });
 
-    expect(container.textContent).toContain('Archive a running chat');
+    expect(document.body.textContent).toContain('Archive a running chat');
     expect(stillRunning()).toEqual(['Its turn']);
-    expect(container.textContent).toContain('Archiving stops all of it first');
+    expect(document.body.textContent).toContain(
+      'Archiving stops all of it first',
+    );
     expect(button('Cancel turn & archive')).toBeTruthy();
   });
 
   it('names the members a running team run has working', () => {
     renderDialog({ target: RUNNING_TEAM, workers: ['Tony Stark'] });
 
-    expect(container.textContent).toContain('Archive a run in progress');
+    expect(document.body.textContent).toContain('Archive a run in progress');
     expect(stillRunning()).toEqual(['Working: Tony Stark']);
-    expect(container.textContent).not.toContain('is still working');
+    expect(document.body.textContent).not.toContain('is still working');
   });
 
   it('lists the background work a settled thread still holds', () => {
     renderDialog({ target: SETTLED_TEAM_WITH_BACKGROUND });
 
-    expect(container.textContent).toContain('Archive run');
-    expect(container.textContent).not.toContain('in progress');
+    expect(document.body.textContent).toContain('Archive run');
+    expect(document.body.textContent).not.toContain('in progress');
     expect(stillRunning()).toEqual(['1 background command', '2 monitors']);
     expect(button('Stop & archive')).toBeTruthy();
   });
@@ -393,7 +399,7 @@ describe('ArchiveThreadDialog', () => {
       );
     });
 
-    const item = container.querySelector(
+    const item = document.body.querySelector(
       '[data-slot="archive-still-running"] li',
     );
     expect(item?.getAttribute('title')).toBe(`Command: ${command}`);
@@ -406,10 +412,10 @@ describe('ArchiveThreadDialog', () => {
   it('draws the plain copy for a finished thread, with nothing stopped', () => {
     renderDialog({ target: { ...SETTLED, isTeam: true } });
 
-    expect(container.textContent).toContain('Archive run');
+    expect(document.body.textContent).toContain('Archive run');
     expect(stillRunning()).toEqual([]);
-    expect(container.textContent).not.toContain('Stop');
-    expect(container.textContent).not.toContain('still working');
+    expect(document.body.textContent).not.toContain('Stop');
+    expect(document.body.textContent).not.toContain('still working');
     expect(button('Archive')).toBeTruthy();
   });
 
@@ -422,13 +428,15 @@ describe('ArchiveThreadDialog', () => {
 
     renderDialog({ lessons: LESSONS });
     expect(checkbox()).not.toBeNull();
-    expect(container.textContent).toContain('Extract lessons from this thread');
+    expect(document.body.textContent).toContain(
+      'Extract lessons from this thread',
+    );
   });
 
   it('lays the box and its title on one centred grid row, with the hint alone under the title', () => {
     renderDialog({ lessons: LESSONS, lessonModel: 'Haiku 5.5' });
 
-    const row = container.querySelector<HTMLLabelElement>(
+    const row = document.body.querySelector<HTMLLabelElement>(
       '[data-slot="archive-extract-lessons"]',
     )!;
     expect(row.className).toContain('grid-cols-[auto_1fr]');
@@ -446,7 +454,7 @@ describe('ArchiveThreadDialog', () => {
   it('shows one short line of what finished runs typically cost and took', () => {
     renderDialog({ lessons: LESSONS, lessonModel: 'Haiku 5.5' });
 
-    const row = container.querySelector(
+    const row = document.body.querySelector(
       '[data-slot="archive-extract-lessons"]',
     )!;
     expect(
@@ -455,14 +463,14 @@ describe('ArchiveThreadDialog', () => {
     expect(row.textContent).toBe(
       'Extract lessons from this threadUsually ~$0.13 and ~2m on Haiku 5.5',
     );
-    expect(container.textContent).not.toContain('$0.21');
+    expect(document.body.textContent).not.toContain('$0.21');
   });
 
   it('keeps the whole explanation in the row tooltip', () => {
     renderDialog({ lessons: LESSONS, lessonModel: 'Haiku 5.5' });
 
     expect(
-      container
+      document.body
         .querySelector('[data-slot="archive-extract-lessons"]')
         ?.getAttribute('title'),
     ).toBe(
@@ -474,7 +482,7 @@ describe('ArchiveThreadDialog', () => {
     renderDialog({ lessons: { ...LESSONS, typical: null } });
 
     expect(
-      container.querySelector('[data-slot="archive-lessons-typical"]')
+      document.body.querySelector('[data-slot="archive-lessons-typical"]')
         ?.textContent,
     ).toBe('Cost not measured yet');
   });
@@ -573,7 +581,7 @@ describe('useArchiveThread', () => {
     await openDialog();
 
     expect(estimateLessons).toHaveBeenCalledWith({ runId: 'run-1' });
-    expect(container.textContent).toContain('Archive chat');
+    expect(document.body.textContent).toContain('Archive chat');
   });
 
   it('archives with reflection when the thread has signals and the lessons box stays on', async () => {
@@ -583,7 +591,7 @@ describe('useArchiveThread', () => {
     await press('Archive');
 
     expect(archive).toHaveBeenCalledWith(SETTLED, 'reflect');
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('archives with skip when the lessons box is unchecked', async () => {
@@ -616,8 +624,8 @@ describe('useArchiveThread', () => {
 
     await press('Archive');
 
-    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
-    expect(container.textContent).toContain('the daemon is not reachable');
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.body.textContent).toContain('the daemon is not reachable');
     expect(button('Archive')).toBeTruthy();
   });
 
@@ -628,7 +636,7 @@ describe('useArchiveThread', () => {
     await press('Cancel');
 
     expect(archive).not.toHaveBeenCalled();
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 });
 
@@ -654,7 +662,9 @@ describe('useArchiveThread — a running team run', () => {
 
   function items(): string[] {
     return [
-      ...container.querySelectorAll('[data-slot="archive-still-running"] li'),
+      ...document.body.querySelectorAll(
+        '[data-slot="archive-still-running"] li',
+      ),
     ].map((item) => item.textContent ?? '');
   }
 
@@ -810,7 +820,9 @@ describe('useArchiveThread — background processes', () => {
 
   function items(): string[] {
     return [
-      ...container.querySelectorAll('[data-slot="archive-still-running"] li'),
+      ...document.body.querySelectorAll(
+        '[data-slot="archive-still-running"] li',
+      ),
     ].map((item) => item.textContent ?? '');
   }
 

@@ -64,7 +64,7 @@ export function askUserQuestionSchema(): Record<string, unknown> {
       },
       artifacts: {
         type: 'array',
-        description: `Optional: the ids of pages you published with show_artifact in this thread that the question is about — at most ${MAX_QUESTION_ATTACHMENTS}. The card shows them beside the question. An id this thread never published refuses the call.`,
+        description: `Optional: the ids of the pages you published with show_artifact in this thread that the user needs to see to answer — at most ${MAX_QUESTION_ATTACHMENTS}. The card shows exactly these beside the question and nothing else: no page is ever attached for you, so leave this out when the answer depends on no page. An id this thread never published refuses the call.`,
         items: { type: 'string', maxLength: MAX_QUESTION_ARTIFACT_ID_LENGTH },
         maxItems: MAX_QUESTION_ATTACHMENTS,
       },

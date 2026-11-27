@@ -6786,7 +6786,6 @@ export class TeamExecutorService
                 questions: hostCardQuestions(questions),
                 ...(await this.questionAttachments?.cardFields(
                   runId,
-                  title,
                   hostCardQuestions(questions),
                   artifacts,
                 )),
@@ -7750,10 +7749,7 @@ export class TeamExecutorService
                       )),
                       ...(await this.questionAttachments?.cardFields(
                         runId,
-                        null,
                         mapped.payload.questions,
-                        [],
-                        callContext?.callId,
                       )),
                     }
                   : {}),

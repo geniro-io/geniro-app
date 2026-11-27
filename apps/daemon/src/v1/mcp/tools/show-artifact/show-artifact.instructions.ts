@@ -145,8 +145,8 @@ export function showArtifactInstructions(
     'Edits against a version that is no longer the latest are refused; the refusal names the latest. ' +
     'Call it ONCE per page, and do not also write the content out as text: the user sees the page, so ' +
     'restating it shows the same thing twice. Say what it SHOWS, and what you want them to notice. ' +
-    'When you then ask the user a question about the page, name the page by its exact title in the question ' +
-    '(or pass its artifact_id in ask_user_question’s artifacts where you have that tool): the question card shows the page. ' +
+    'When you then ask the user a question whose answer depends on the page, pass its artifact_id in ask_user_question’s artifacts ' +
+    'where you have that tool: a question card shows only the pages passed there, never one by itself. ' +
     (inTeamRun ? `${TEAM_RUN_PAGES} ` : '') +
     (shareOffered ? `${SHARING} ` : '') +
     'The result is a short receipt naming the artifact_id and version, never the document.'

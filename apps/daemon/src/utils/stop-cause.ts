@@ -53,8 +53,12 @@ export function resumesUnattended(
 }
 
 /**
- * Whether a chat's cut-off turn is continued by the daemon itself, in the same
- * session, with no one sending a message: only after an update or a restart.
+ * Whether both the stop and what follows it happen with nobody acting: an
+ * update or a restart. Only then is a chat's cut-off turn continued by the
+ * daemon itself, in the same session, and only then is a team call the daemon
+ * already continued once failed rather than continued again — after a quit or
+ * a crash the user's own relaunch or choice continues it, so no loop runs by
+ * itself.
  */
 export function continuesUnattended(
   cause: InterruptCause,

@@ -5373,55 +5373,106 @@ describe('TeamExecutorService', () => {
       },
     );
 
-    it('fails a call it already continued once, naming its thread', async () => {
-      const ctx = setup();
-      const orphan = await cutOffRun(ctx, [
-        [
-          'poet',
-          'system',
-          {
-            callId: 'call-1',
-            message: 'continued',
-            restartContinued: 'call-1',
-          },
-        ],
-      ]);
-      ctx.callContextDao.sessions.set('call-1', ['sess-poet']);
-
-      await ctx.service.reconcileOrphanedRuns('restart');
-
-      const result = ctx.itemDao.items.find(
-        (i) => i.runId === orphan.id && i.kind === 'call_result',
-      );
-      expect(JSON.parse(result!.payload)).toMatchObject({
-        callId: 'call-1',
-        status: 'error',
-        error: expect.stringMatching(
-          /^CALLEE_FAILED\[daemon_restart\]: .*thread: 'call-1'/,
-        ),
-      });
-      const run = ctx.runDao.runs.get(orphan.id)!;
-      const record = readRestartContinuation(run.restartContinuation);
-      expect(record?.calls).toEqual([]);
-      expect(record?.failedCalls).toEqual([
+    const continuedOnce = [
+      [
+        'poet',
+        'system',
         {
           callId: 'call-1',
-          callerMemberId: 'orch',
-          callerConversationId: null,
-          calleeMemberId: 'poet',
-          again: true,
+          message: 'continued',
+          restartContinued: 'call-1',
         },
-      ]);
-      expect(
-        ctx.itemDao.items
-          .filter((i) => i.runId === orphan.id && i.kind === 'status')
-          .map((i) => JSON.parse(i.payload) as Record<string, unknown>)
-          .filter(
-            (payload) =>
-              payload.callId === 'call-1' && payload.status !== 'running',
+      ],
+    ] as const;
+
+    it.each(['quit', 'crash', 'unknown'] as const)(
+      'after a %s continues a call it already continued once again',
+      async (cause) => {
+        const ctx = setup();
+        const orphan = await cutOffRun(ctx, continuedOnce);
+        ctx.callContextDao.sessions.set('call-1', ['sess-poet']);
+
+        await ctx.service.reconcileOrphanedRuns(cause);
+
+        const record = readRestartContinuation(
+          ctx.runDao.runs.get(orphan.id)!.restartContinuation,
+        );
+        expect(record?.calls.map((call) => call.callId)).toEqual(['call-1']);
+        expect(record?.failedCalls).toEqual([]);
+        expect(
+          ctx.itemDao.items.some(
+            (i) => i.runId === orphan.id && i.kind === 'call_result',
           ),
-      ).toEqual([{ nodeId: 'poet', status: 'failed', callId: 'call-1' }]);
+        ).toBe(false);
+      },
+    );
+
+    it('keeps a call continued after an update for the user when a crash cuts it off again', async () => {
+      const ctx = setup();
+      const orphan = await cutOffRun(ctx);
+      ctx.callContextDao.sessions.set('call-1', ['sess-poet']);
+      await ctx.service.reconcileOrphanedRuns('self-update');
+      ctx.runDao.runs.get(orphan.id)!.restartContinuation = null;
+      await ctx.itemDao.create({
+        runId: orphan.id,
+        memberId: 'poet',
+        seq: (await ctx.itemDao.maxSeq(orphan.id)) + 1,
+        kind: 'system',
+        payload: JSON.stringify(continuedOnce[0][2]),
+      });
+
+      await ctx.service.reconcileOrphanedRuns('crash');
+
+      const record = readRestartContinuation(
+        ctx.runDao.runs.get(orphan.id)!.restartContinuation,
+      );
+      expect(record).toMatchObject({ cause: 'crash', held: true });
+      expect(record?.calls.map((call) => call.callId)).toEqual(['call-1']);
+      expect(record?.failedCalls).toEqual([]);
     });
+
+    it.each(['self-update', 'restart'] as const)(
+      'after a %s fails a call it already continued once, naming its thread',
+      async (cause) => {
+        const ctx = setup();
+        const orphan = await cutOffRun(ctx, continuedOnce);
+        ctx.callContextDao.sessions.set('call-1', ['sess-poet']);
+
+        await ctx.service.reconcileOrphanedRuns(cause);
+
+        const result = ctx.itemDao.items.find(
+          (i) => i.runId === orphan.id && i.kind === 'call_result',
+        );
+        expect(JSON.parse(result!.payload)).toMatchObject({
+          callId: 'call-1',
+          status: 'error',
+          error: expect.stringMatching(
+            /^CALLEE_FAILED\[daemon_restart\]: .*thread: 'call-1'/,
+          ),
+        });
+        const run = ctx.runDao.runs.get(orphan.id)!;
+        const record = readRestartContinuation(run.restartContinuation);
+        expect(record?.calls).toEqual([]);
+        expect(record?.failedCalls).toEqual([
+          {
+            callId: 'call-1',
+            callerMemberId: 'orch',
+            callerConversationId: null,
+            calleeMemberId: 'poet',
+            again: true,
+          },
+        ]);
+        expect(
+          ctx.itemDao.items
+            .filter((i) => i.runId === orphan.id && i.kind === 'status')
+            .map((i) => JSON.parse(i.payload) as Record<string, unknown>)
+            .filter(
+              (payload) =>
+                payload.callId === 'call-1' && payload.status !== 'running',
+            ),
+        ).toEqual([{ nodeId: 'poet', status: 'failed', callId: 'call-1' }]);
+      },
+    );
 
     it('a crash after the record was written holds it for the user and says so on a new row', async () => {
       const ctx = setup();

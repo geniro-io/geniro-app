@@ -19,6 +19,7 @@ import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { environment } from '../../../environments';
 import {
+  continuesUnattended,
   type InterruptCause,
   interruptCauseClause,
   peekStopCause,
@@ -4600,9 +4601,11 @@ export class TeamExecutorService
    * whose callee was working is kept; the rows that opened them are closed
    * here, marked `continues` so the transcript reads no ending into them, and
    * the turn the drain opens is the only one shown working. A member whose
-   * standing card waits on the user is left to its answer, and a call already
-   * continued once after a restart is not continued again: it fails
-   * `CALLEE_FAILED[daemon_restart]`, naming its thread. Every call closed here
+   * standing card waits on the user is left to its answer. A call already
+   * continued once is continued again after a quit or a crash, which only the
+   * user's own relaunch or choice continues; an update or a restart cutting it
+   * off again fails it `CALLEE_FAILED[daemon_restart]`, naming its thread, so
+   * no loop runs with nobody acting. Every call closed here
    * is told to its caller in the continuation (`failedCalls`). Answers the
    * next free seq, or null — nothing written — when nothing is left to continue, so the
    * run is closed as a stop nobody continues.
@@ -4643,7 +4646,8 @@ export class TeamExecutorService
       const conversation = callConversation(seed.records, call.callId);
       const sessionId =
         sessions.get(call.callId)?.at(-1) ?? conversation?.sessionId ?? null;
-      const again = record?.continuedAfterRestart === true;
+      const again =
+        record?.continuedAfterRestart === true && continuesUnattended(cause);
       if (
         call.callerMemberId !== null &&
         call.calleeMemberId !== null &&

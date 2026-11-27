@@ -1,3 +1,3 @@
-### Fixed
+### Internal
 
-- Signing in to a CLI that asks for a code shows the code field at once instead of after a four-second pause
+- A CLI sign-in stops waiting for a link once the CLI asks for a code or exits, which makes its tests fast and steady

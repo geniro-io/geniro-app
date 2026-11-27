@@ -682,9 +682,15 @@ interface LayoutMetrics {
 }
 
 async function screenshot(ctx: Ctx, options: ScreenshotOptions): Promise<Done> {
+  const page = await pageSize(ctx);
+  if (page.width === 0 || page.height === 0) {
+    throw new AgentError(
+      `Tab ${ctx.tab.id} is hidden (viewport ${page.width}×${page.height}), so it cannot be captured — open the address in a new tab with browser_open`,
+    );
+  }
   const resized = options.width !== undefined || options.height !== undefined;
   if (resized) {
-    await resizeViewport(ctx, options.width, options.height);
+    await resizeViewport(ctx, page, options.width, options.height);
   }
   const area =
     options.fullPage || options.view || resized
@@ -779,11 +785,12 @@ async function devicePixelRatio(ctx: Ctx): Promise<number> {
     : 1;
 }
 
-async function resizeViewport(
-  ctx: Ctx,
-  width: number | undefined,
-  height: number | undefined,
-): Promise<void> {
+interface PageSize {
+  width: number | undefined;
+  height: number | undefined;
+}
+
+async function pageSize(ctx: Ctx): Promise<PageSize> {
   const current = await ctx.send<{ result?: RemoteObject }>(
     'Runtime.evaluate',
     {
@@ -791,13 +798,25 @@ async function resizeViewport(
       returnByValue: true,
     },
   );
-  const [innerWidth, innerHeight] = Array.isArray(current.result?.value)
+  const [width, height] = Array.isArray(current.result?.value)
     ? (current.result.value as unknown[])
     : [];
+  return {
+    width: typeof width === 'number' ? width : undefined,
+    height: typeof height === 'number' ? height : undefined,
+  };
+}
+
+async function resizeViewport(
+  ctx: Ctx,
+  page: PageSize,
+  width: number | undefined,
+  height: number | undefined,
+): Promise<void> {
   ctx.atEnd('Emulation.clearDeviceMetricsOverride');
   await ctx.send('Emulation.setDeviceMetricsOverride', {
-    width: width ?? (typeof innerWidth === 'number' ? innerWidth : 1280),
-    height: height ?? (typeof innerHeight === 'number' ? innerHeight : 800),
+    width: width ?? page.width ?? 1280,
+    height: height ?? page.height ?? 800,
     deviceScaleFactor: 0,
     mobile: false,
   });

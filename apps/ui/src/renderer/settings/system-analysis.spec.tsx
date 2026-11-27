@@ -532,4 +532,33 @@ describe('SystemAnalysisPage', () => {
     expect(listed[0]!.textContent).toContain('Reflect on the build');
     expect(listed[0]!.textContent).toContain('4 failed tool calls');
   });
+
+  it('keeps the kind badge and the score on the line of a title too long to fit', async () => {
+    const longTitle =
+      'A thread title that runs on far past the width of the dialog '
+        .repeat(6)
+        .trim();
+    const threads = [digestThread('t1', longTitle, 'chat')];
+    await renderPage({
+      api: asApi(fakeApi((days) => scopeOf(days, 1, threads))),
+    });
+
+    await press(button(container, 'Show threads'));
+    const row = document.body.querySelector<HTMLElement>(
+      '[data-slot="system-analysis-thread"]',
+    );
+    const line = row!.firstElementChild as HTMLElement;
+    const [title, badge, score] = [...line.children] as HTMLElement[];
+
+    expect(line.children).toHaveLength(3);
+    expect(line.classList.contains('flex-wrap')).toBe(false);
+    expect(title!.textContent).toBe(longTitle);
+    expect(title!.classList.contains('min-w-0')).toBe(true);
+    expect(title!.classList.contains('flex-1')).toBe(false);
+    expect(title!.classList.contains('truncate')).toBe(true);
+    expect(badge!.textContent).toBe('Chat');
+    expect(score!.textContent).toBe('score 5');
+    expect(score!.classList.contains('ml-auto')).toBe(true);
+    expect(score!.classList.contains('shrink-0')).toBe(true);
+  });
 });

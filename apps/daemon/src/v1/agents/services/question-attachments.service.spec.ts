@@ -120,13 +120,24 @@ describe('QuestionAttachmentsService (in-memory sqlite)', () => {
   it('attaches exactly the pages passed, each once at its newest version', async () => {
     await write(1, 'show_artifact', page('plan-page', 'Launch plan'));
     await write(2, 'show_artifact', page('chart-page', 'Quarterly chart'));
-    await write(3, 'show_artifact', { ...page('plan-page', 'Launch plan'), version: 2 });
+    await write(3, 'show_artifact', {
+      ...page('plan-page', 'Launch plan'),
+      version: 2,
+    });
 
     expect(
-      await service.cardFields(RUN, asks('Which one?'), ['plan-page', 'plan-page']),
+      await service.cardFields(RUN, asks('Which one?'), [
+        'plan-page',
+        'plan-page',
+      ]),
     ).toEqual({
       attachments: [
-        { kind: 'artifact', artifactId: 'plan-page', title: 'Launch plan', version: 2 },
+        {
+          kind: 'artifact',
+          artifactId: 'plan-page',
+          title: 'Launch plan',
+          version: 2,
+        },
       ],
       moreAttachments: 0,
     });

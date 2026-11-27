@@ -1,3 +1,3 @@
 ### Fixed
 
-- A question card shows only the page it is about, instead of every page its thread published since your last message
+- A question card shows only the pages its agent attached to that question, instead of every page its thread published

@@ -50,7 +50,14 @@ export function questionAttachmentsOf(
       const page = byId.get(artifactId);
       return page === undefined
         ? []
-        : [{ kind: 'artifact', artifactId, title: page.title, version: page.version }];
+        : [
+            {
+              kind: 'artifact',
+              artifactId,
+              title: page.title,
+              version: page.version,
+            },
+          ];
     },
   );
   return {

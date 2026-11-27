@@ -227,6 +227,80 @@ describe('CommandCenterService.board', () => {
     });
   });
 
+  it("shows a finished thread's report on its canvas line, never the user's own message, and an unfinished thread's newest message as it is", async () => {
+    const items = new ItemDao(db.em);
+    const outcomes = new Map([['with-outcome', 'Shipped PR #12']]);
+    const runDao = new RunDao(db.em);
+    chats.listChats = vi.fn(
+      async (scope: 'active', page: { runIds?: string[] } = {}) => {
+        const runs = (await runDao.listChats(scope, db.em.fork(), page)).map(
+          (run) => wireOf(run, pending),
+        );
+        const previews = await items.runPreviews(runs.map((run) => run.id));
+        return runs.map((run) => ({
+          ...run,
+          lastMessage: previews.get(run.id)?.lastMessage ?? null,
+          outcome: outcomes.has(run.id)
+            ? { summary: outcomes.get(run.id) }
+            : null,
+        }));
+      },
+    );
+    for (const id of ['no-outcome', 'with-outcome', 'working-card']) {
+      await seedChatAged(id, HOUR);
+      await db.seedItem(
+        id,
+        2,
+        new Date(now - 30 * MINUTE),
+        'message',
+        { text: 'Cache cleared, PR is up' },
+        { role: 'assistant' },
+      );
+      await db.seedItem(
+        id,
+        3,
+        new Date(now - 10 * MINUTE),
+        'message',
+        { text: 'thanks' },
+        { role: 'user' },
+      );
+    }
+    await db.seedTask('no-outcome', 'done');
+    await db.seedTask('with-outcome', 'done');
+    await seedChatAged('user-only', HOUR);
+    await db.seedTask('user-only', 'done');
+    const longReport = `Rebased on main\n\n${'All checks pass. '.repeat(12)}`;
+    await seedChatAged('long-report', HOUR);
+    await db.seedItem(
+      'long-report',
+      2,
+      new Date(now - 30 * MINUTE),
+      'message',
+      { text: longReport },
+      { role: 'assistant' },
+    );
+    await db.seedTask('long-report', 'done');
+
+    const board = await service.board();
+    const long = board.cards.find((card) => card.run.id === 'long-report');
+
+    expect(long?.report).toBe(longReport.trim());
+    expect(long?.activity).toHaveLength(140);
+    expect(long?.activity).toMatch(/^Rebased on main All checks pass\. .*…$/);
+    expect(
+      Object.fromEntries(
+        board.cards
+          .filter((card) => card.run.id !== 'long-report')
+          .map((card) => [card.run.id, card.activity]),
+      ),
+    ).toEqual({
+      'no-outcome': 'Cache cleared, PR is up',
+      'with-outcome': 'Shipped PR #12',
+      'working-card': 'thanks',
+      'user-only': null,
+    });
+  });
+
   it('answers each run’s board column, done for a thread whose card is done', async () => {
     await seedChatAged('done-card', HOUR);
     await db.seedTask('done-card', 'done');

@@ -2459,7 +2459,6 @@ describe('ChatService', () => {
               version: 1,
             },
           ],
-          moreAttachments: 0,
         });
         approvals.resolve(
           run.id,
@@ -2489,7 +2488,6 @@ describe('ChatService', () => {
 
         expect(cardPayload(itemDao)).toMatchObject({
           attachments: [],
-          moreAttachments: 0,
         });
         approvals.resolve(
           run.id,
@@ -2531,7 +2529,6 @@ describe('ChatService', () => {
               version: 1,
             },
           ],
-          moreAttachments: 0,
         });
       });
 
@@ -2554,7 +2551,6 @@ describe('ChatService', () => {
         expect(cardPayload(itemDao)).toMatchObject({
           questions: expect.any(Array),
           attachments: [],
-          moreAttachments: 0,
         });
       });
 

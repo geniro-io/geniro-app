@@ -18,7 +18,7 @@ describe('questionAttachmentsOf', () => {
         [],
         [page('plan', 'Launch plan'), page('chart', 'Quarterly chart')],
       ),
-    ).toEqual({ attachments: [], moreAttachments: 0 });
+    ).toEqual({ attachments: [] });
   });
 
   it('attaches exactly the pages passed, in the order given', () => {
@@ -45,7 +45,6 @@ describe('questionAttachmentsOf', () => {
           version: 1,
         },
       ],
-      moreAttachments: 0,
     });
   });
 
@@ -88,6 +87,5 @@ describe('questionAttachmentsOf', () => {
       pages,
     );
     expect(fields.attachments).toHaveLength(MAX_QUESTION_ATTACHMENTS);
-    expect(fields.moreAttachments).toBe(0);
   });
 });

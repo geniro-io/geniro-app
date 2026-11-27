@@ -1,9 +1,9 @@
 /**
- * The pages and pictures a question card is about, resolved once when its
+ * The pages a question card is about, resolved once when its
  * `approval_request` row is written and kept on that row.
  *
  * TWIN PARSER: `apps/ui/src/renderer/chats/question-attachments-payload.ts`
- * reads `attachments` / `moreAttachments` back off the row and off the
+ * reads `attachments` back off the row and off the
  * relayed card (`ThreadQuestionCardInput`). A key renamed here is renamed
  * there. A page's serving key is never stored: the renderer reads it from the
  * thread's own artifact listing when it draws the card.
@@ -20,13 +20,7 @@ export interface QuestionAttachment {
 
 export interface QuestionAttachmentFields {
   attachments: QuestionAttachment[];
-  moreAttachments: number;
 }
-
-export const NO_QUESTION_ATTACHMENTS: QuestionAttachmentFields = {
-  attachments: [],
-  moreAttachments: 0,
-};
 
 /** One page of the run at its newest version, as its artifact listing names it. */
 export interface QuestionPage {
@@ -62,6 +56,5 @@ export function questionAttachmentsOf(
   );
   return {
     attachments: attachments.slice(0, MAX_QUESTION_ATTACHMENTS),
-    moreAttachments: 0,
   };
 }

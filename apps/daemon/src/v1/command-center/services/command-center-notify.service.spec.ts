@@ -1049,7 +1049,7 @@ describe('CommandCenterNotifyService', () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it('puts the thread question’s attachments on the manager card', async () => {
+  it('puts the thread question’s attachments on the manager card, and no count of more', async () => {
     boardThreads.add(THREAD);
     setThread({ id: THREAD, title: 'Billing cache', status: 'running' });
     const attachments = [
@@ -1072,11 +1072,9 @@ describe('CommandCenterNotifyService', () => {
     await service.review(THREAD);
 
     expect(raiseOwnedCard).toHaveBeenCalledTimes(1);
-    expect(raiseOwnedCard.mock.calls[0]?.[2].input).toMatchObject({
-      threadRequestId: REQUEST,
-      attachments,
-      moreAttachments: 1,
-    });
+    const input = raiseOwnedCard.mock.calls[0]?.[2].input;
+    expect(input).toMatchObject({ threadRequestId: REQUEST, attachments });
+    expect(input).not.toHaveProperty('moreAttachments');
   });
 
   it('puts no attachments on the manager card for a question row written before they existed', async () => {

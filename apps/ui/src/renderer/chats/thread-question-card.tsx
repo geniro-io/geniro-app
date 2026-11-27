@@ -44,7 +44,6 @@ export interface ThreadQuestionRelay {
   input: unknown;
   questions?: unknown;
   options?: unknown;
-  /** The pages and pictures the question was asked about; absent on a row written before they existed. */
   attached?: QuestionAttachmentSet;
 }
 

@@ -111,10 +111,10 @@ describe('QuestionAttachmentsService (in-memory sqlite)', () => {
 
     expect(
       await service.cardFields(RUN, asks('Use the Launch plan or not?')),
-    ).toEqual({ attachments: [], moreAttachments: 0 });
+    ).toEqual({ attachments: [] });
     expect(
       await service.cardFields(RUN, asks('Use the Launch plan?'), []),
-    ).toEqual({ attachments: [], moreAttachments: 0 });
+    ).toEqual({ attachments: [] });
   });
 
   it('attaches exactly the pages passed, each once at its newest version', async () => {
@@ -139,7 +139,6 @@ describe('QuestionAttachmentsService (in-memory sqlite)', () => {
           version: 2,
         },
       ],
-      moreAttachments: 0,
     });
   });
 
@@ -151,7 +150,7 @@ describe('QuestionAttachmentsService (in-memory sqlite)', () => {
 
     await expect(
       service.cardFields(RUN, asks('Use it?'), ['plan-page']),
-    ).resolves.toEqual({ attachments: [], moreAttachments: 0 });
+    ).resolves.toEqual({ attachments: [] });
     expect(
       await service.cardFields(RUN, asks('Use it?'), ['plan-page']),
     ).toMatchObject({ attachments: [{ artifactId: 'plan-page' }] });

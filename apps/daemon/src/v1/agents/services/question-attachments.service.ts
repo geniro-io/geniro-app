@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import {
-  NO_QUESTION_ATTACHMENTS,
   type QuestionAttachmentFields,
   questionAttachmentsOf,
 } from '../utils/question-attachments';
@@ -31,7 +30,7 @@ export class QuestionAttachmentsService {
       return {};
     }
     if (explicit.length === 0) {
-      return { ...NO_QUESTION_ATTACHMENTS, attachments: [] };
+      return { attachments: [] };
     }
     try {
       return questionAttachmentsOf(
@@ -42,7 +41,7 @@ export class QuestionAttachmentsService {
       this.logger.warn(
         `run ${runId}: a question's pages could not be read — attached none: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return { ...NO_QUESTION_ATTACHMENTS, attachments: [] };
+      return { attachments: [] };
     }
   }
 

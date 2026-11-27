@@ -66,6 +66,25 @@ describe('messagesBefore', () => {
     );
   });
 
+  it('leaves out every page and picture the asking turn showed', () => {
+    const shown = [
+      ...ROWS.slice(0, 6),
+      row(61, 'show_artifact', null, {
+        artifactId: 'plan-page',
+        version: 1,
+        title: 'Launch plan',
+        key: 'k'.repeat(64),
+      }),
+      row(62, 'show_gallery', null, { images: [{ path: '/tmp/a.png' }] }),
+      ...ROWS.slice(6),
+    ];
+    expect(messagesBefore(shown, 'req-1')).toEqual([
+      { seq: 2, role: 'assistant', text: 'Looking at it' },
+      { seq: 5, role: 'assistant', text: 'Two caches could be meant' },
+      { seq: 6, role: 'user', text: 'The shared one' },
+    ]);
+  });
+
   it('reads rows in seq order whatever order the page came in', () => {
     expect(messagesBefore([...ROWS].reverse(), 'req-1').at(-1)?.seq).toBe(6);
   });

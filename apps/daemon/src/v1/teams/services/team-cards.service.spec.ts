@@ -595,7 +595,6 @@ describe('TeamCardsService — a member’s own question', () => {
             version: 1,
           },
         ],
-        moreAttachments: 0,
       },
     });
   });

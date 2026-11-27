@@ -9647,9 +9647,8 @@ export interface ThreadQuestionCardInput {
   input: unknown;
   questions?: unknown;
   options?: unknown;
-  /** The thread row's `attachments` and `moreAttachments`, as written (`utils/question-attachments.ts`). */
+  /** The thread row's `attachments`, as written (`utils/question-attachments.ts`). */
   attachments?: unknown;
-  moreAttachments?: unknown;
 }
 
 /** How many managed threads one `tell_threads` call may reach. */

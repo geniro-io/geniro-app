@@ -24158,7 +24158,6 @@ describe("TeamExecutorService — geniro's own question tool", () => {
             version: 1,
           },
         ],
-        moreAttachments: 0,
       });
       approvals.resolve(
         run.id,
@@ -24214,7 +24213,6 @@ describe("TeamExecutorService — geniro's own question tool", () => {
       expect(cardPayload(itemDao)).toMatchObject({
         questions: expect.any(Array),
         attachments: [],
-        moreAttachments: 0,
       });
     });
   });

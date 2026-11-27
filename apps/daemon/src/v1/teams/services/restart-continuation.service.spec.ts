@@ -71,6 +71,12 @@ function setup(runs: Partial<Run>[]) {
       async (): Promise<'continued' | 'busy' | 'gone'> => 'continued',
     ),
     abandonRestartContinuation: vi.fn(async () => undefined),
+    continueWithMessage: vi.fn(
+      async (): Promise<{
+        outcome: 'continued' | 'busy' | 'gone';
+        item: Record<string, unknown> | null;
+      }> => ({ outcome: 'continued', item: { id: 'row-1' } }),
+    ),
     setHeldContinuation: vi.fn(),
   };
   const sessions = { oweKeyNote: vi.fn(() => true) };
@@ -515,18 +521,83 @@ describe('RestartContinuationService with runs a crash cut off', () => {
     expect(ctx.chats.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('installs the continuation a user message into a held run starts', async () => {
-    const ctx = setup([heldRun('team-1')]);
+  function installed(ctx: ReturnType<typeof setup>) {
     ctx.service.onModuleInit();
-    const install = ctx.teams.setHeldContinuation.mock.calls[0]?.[0] as (
-      runId: string,
-    ) => Promise<void>;
+    const [continueHeld, declineHeld] = ctx.teams.setHeldContinuation.mock
+      .calls[0] as unknown as [
+      (
+        runId: string,
+        message: { text: string; images: [] },
+      ) => Promise<unknown>,
+      (runId: string) => Promise<boolean>,
+    ];
+    return { continueHeld, declineHeld };
+  }
 
-    await install('team-1');
-
-    expect(ctx.teams.continueAfterRestart).toHaveBeenCalledWith('team-1', {
-      ...HELD_RECORD,
-      held: false,
+  it('continues a held run with the message the user wrote into it, clearing its record first', async () => {
+    const ctx = setup([heldRun('team-1')]);
+    const { continueHeld } = installed(ctx);
+    let seenAtHandOff: string | null | undefined;
+    ctx.teams.continueWithMessage.mockImplementation(async () => {
+      seenAtHandOff = ctx.rows.get('team-1')!.restartContinuation;
+      return { outcome: 'continued', item: { id: 'row-1' } };
     });
+
+    expect(
+      await continueHeld('team-1', { text: 'carry on', images: [] }),
+    ).toEqual({ id: 'row-1' });
+    expect(ctx.teams.continueWithMessage).toHaveBeenCalledWith(
+      'team-1',
+      { ...HELD_RECORD, held: false },
+      { text: 'carry on', images: [] },
+    );
+    expect(seenAtHandOff).toBeNull();
+  });
+
+  it('keeps a held run held and refuses the message RUN_BUSY while its last pass still finishes', async () => {
+    const ctx = setup([heldRun('team-1')]);
+    const { continueHeld } = installed(ctx);
+    ctx.teams.continueWithMessage.mockResolvedValue({
+      outcome: 'busy',
+      item: null,
+    });
+
+    await expect(
+      continueHeld('team-1', { text: 'carry on', images: [] }),
+    ).rejects.toMatchObject({ errorCode: 'RUN_BUSY' });
+    expect(
+      JSON.parse(ctx.rows.get('team-1')!.restartContinuation!),
+    ).toMatchObject({ held: true });
+  });
+
+  it('leaves a message into a run no longer held to the ordinary delivery', async () => {
+    const ctx = setup([
+      {
+        id: 'team-1',
+        teamId: 'crew',
+        status: 'running',
+        archivedAt: null,
+        restartContinuation: JSON.stringify(TEAM_RECORD),
+      },
+    ]);
+    const { continueHeld } = installed(ctx);
+
+    expect(
+      await continueHeld('team-1', { text: 'carry on', images: [] }),
+    ).toBeNull();
+    expect(ctx.teams.continueWithMessage).not.toHaveBeenCalled();
+  });
+
+  it('declines a held run its Stop stops', async () => {
+    const ctx = setup([heldRun('team-1')]);
+    const { declineHeld } = installed(ctx);
+
+    expect(await declineHeld('team-1')).toBe(true);
+    expect(ctx.teams.abandonRestartContinuation).toHaveBeenCalledWith(
+      'team-1',
+      HELD_RECORD.cause,
+      true,
+    );
+    expect(ctx.rows.get('team-1')!.restartContinuation).toBeNull();
   });
 });

@@ -195,6 +195,7 @@ import { callerKey } from '../utils/caller-key';
 import { teamInstructionsHashOf } from '../utils/conversation-instructions';
 import { foldFreshStarts } from '../utils/fresh-session-base';
 import { unreachableConnectorsNotice } from '../utils/mcp-allow-list-notice';
+import { turnsLeftForContinuation } from '../utils/open-call-work';
 import { runTeamHashOf } from '../utils/team-snapshot';
 import { CallBroker } from './call-broker.service';
 import { HostWakeGraphDelivery } from './host-wake-graph-delivery.service';
@@ -5361,11 +5362,17 @@ describe('TeamExecutorService', () => {
             .filter((i) => i.kind === 'status')
             .map((i) => JSON.parse(i.payload) as { status: string }),
         ).toEqual([
-          { nodeId: 'orch', status: 'cancelled', continues: true },
+          {
+            nodeId: 'orch',
+            status: 'cancelled',
+            continues: true,
+            ...(held ? { held: true } : {}),
+          },
           {
             nodeId: 'poet',
             status: 'cancelled',
             continues: true,
+            ...(held ? { held: true } : {}),
             callId: 'call-1',
           },
         ]);
@@ -18397,34 +18404,69 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       ).toHaveLength(1);
     });
 
-    it('continues a run a crash cut off first when the user writes into it, then delivers the message', async () => {
+    it('continues a run a crash cut off when the user writes into it, delivering the message in the same pass', async () => {
       const ctx = await cutOffByUpdate(true, 'crash');
       expect(ctx.record).toMatchObject({ cause: 'crash', held: true });
-      const order: string[] = [];
-      ctx.service.setHeldContinuation(async (runId) => {
-        order.push(`continue:${runId}`);
-      });
+      ctx.service.setHeldContinuation(
+        async (runId, message) => {
+          ctx.runDao.runs.get(runId)!.restartContinuation = null;
+          return (
+            await ctx.service.continueWithMessage(
+              runId,
+              { ...ctx.record, held: false },
+              message,
+            )
+          ).item;
+        },
+        async () => false,
+      );
       const before = ctx.claude.starts.length;
 
-      await ctx.service.sendMessage(ctx.run.id, 'carry on');
-      order.push('sent');
+      const item = await ctx.service.sendMessage(ctx.run.id, 'PONG-HELD');
       await drain();
 
-      expect(order).toEqual([`continue:${ctx.run.id}`, 'sent']);
-      expect(
-        ctx.claude.starts.slice(before).map((t) => t.input.prompt),
-      ).toContainEqual(expect.stringContaining('carry on'));
+      expect(item).toMatchObject({ kind: 'message', role: 'user' });
+      expect(JSON.stringify(item.payload)).toContain('PONG-HELD');
+      expect(JSON.stringify(item.payload)).not.toContain('[geniro]');
+      const fresh = ctx.claude.starts.slice(before);
+      const lead = fresh.find((t) => t.input.prompt.includes('PONG-HELD'));
+      expect(lead!.input.prompt).toMatch(
+        /^\[geniro\] The daemon crashed while you were working\.[\s\S]*\n\nPONG-HELD$/,
+      );
+      expect(fresh.some((t) => t.input.prompt.includes('on this call'))).toBe(
+        true,
+      );
     });
 
     it('sends a message into a run no crash holds without continuing anything first', async () => {
       const ctx = await cutOffByUpdate(true, 'self-update');
-      const continued = vi.fn(async () => undefined);
-      ctx.service.setHeldContinuation(continued);
+      const continued = vi.fn(async () => null);
+      ctx.service.setHeldContinuation(continued, async () => false);
       ctx.runDao.runs.get(ctx.run.id)!.restartContinuation = null;
 
       await ctx.service.sendMessage(ctx.run.id, 'carry on');
 
       expect(continued).not.toHaveBeenCalled();
+    });
+
+    it('stops a held run by declining it', async () => {
+      const ctx = await cutOffByUpdate(true, 'crash');
+      const declined = vi.fn(async () => true);
+      ctx.service.setHeldContinuation(async () => null, declined);
+
+      expect(await ctx.service.cancel(ctx.run.id)).toEqual({ cancelled: true });
+      expect(declined).toHaveBeenCalledWith(ctx.run.id);
+    });
+
+    it("marks the turns a crash keeps for the user's choice as held", async () => {
+      const ctx = await cutOffByUpdate(true, 'crash');
+
+      const kept = ctx.itemDao.items
+        .filter((i) => i.runId === ctx.run.id && i.kind === 'status')
+        .map((i) => JSON.parse(i.payload) as Record<string, unknown>)
+        .filter((payload) => payload.continues === true);
+      expect(kept).not.toHaveLength(0);
+      expect(kept.every((payload) => payload.held === true)).toBe(true);
     });
 
     it('ends a run the user chose not to continue, saying so', async () => {
@@ -18446,6 +18488,19 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
           (i) => i.runId === ctx.run.id && i.kind === 'call_result',
         ),
       ).toBe(true);
+      const statuses = ctx.itemDao.items
+        .filter((i) => i.runId === ctx.run.id && i.kind === 'status')
+        .map((i) => JSON.parse(i.payload) as Record<string, unknown>);
+      expect(statuses.at(-1)).toMatchObject({
+        nodeId: 'callee',
+        status: 'failed',
+        callId: 'call-1',
+      });
+      expect(
+        turnsLeftForContinuation(
+          ctx.itemDao.items.filter((i) => i.runId === ctx.run.id),
+        ),
+      ).toEqual([]);
     });
 
     it('continues the cut-off call under its own id in its session, and the lead with one note', async () => {

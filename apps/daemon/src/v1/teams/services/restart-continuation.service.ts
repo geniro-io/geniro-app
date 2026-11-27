@@ -3,7 +3,7 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { ConflictException } from '@packages/common';
 
 import { interruptCauseClause } from '../../../utils/stop-cause';
-import type { RestartContinuation } from '../../agents/chat.types';
+import type { ItemWire, RestartContinuation } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ChatService } from '../../agents/services/chat.service';
@@ -18,7 +18,11 @@ import {
   nodeSessionKey,
 } from '../../agents/utils/session-keys';
 import type { AnswerHeldRuns, HeldRun, HeldRunsAnswered } from '../teams.types';
-import { TeamExecutorService } from './team-executor.service';
+import {
+  type HeldRunMessage,
+  type RestartContinued,
+  TeamExecutorService,
+} from './team-executor.service';
 
 /** How long a run still settling a pass is waited for before the next try. */
 export const RESTART_CONTINUE_RETRY_MS = 5_000;
@@ -54,7 +58,13 @@ export class RestartContinuationService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    this.teams.setHeldContinuation((runId) => this.continueRun(runId, true));
+    this.teams.setHeldContinuation(
+      (runId, message) => this.continueWithMessage(runId, message),
+      async (runId) =>
+        (
+          await this.answerHeld({ continueRunIds: [], declineRunIds: [runId] })
+        ).declined.includes(runId),
+    );
   }
 
   /** Continue every run holding a record — called once, from `onListening`. */
@@ -129,6 +139,47 @@ export class RestartContinuationService implements OnModuleInit {
       await this.decline(runId);
     }
     return { continued, declined };
+  }
+
+  /**
+   * A held run the user wrote into, continued with that message: null when it
+   * is no longer held. A run whose pass is still finishing stays held and the
+   * message is refused `RUN_BUSY`, which its sender queues and sends again.
+   */
+  private async continueWithMessage(
+    runId: string,
+    message: HeldRunMessage,
+  ): Promise<ItemWire | null> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    const stored = readRestartContinuation(run?.restartContinuation ?? null);
+    if (run === null || stored === null || !stored.held) {
+      return null;
+    }
+    const record: RestartContinuation = { ...stored, held: false };
+    await this.runDao.setRestartContinuation(runId, null, em);
+    let continued: RestartContinued;
+    try {
+      continued = await this.teams.continueWithMessage(runId, record, message);
+    } catch (err) {
+      this.logger.error(
+        `run ${runId}: could not continue after ${interruptCauseClause(record.cause)}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      await this.abandon(runId, record, true);
+      throw err;
+    }
+    if (continued.outcome === 'busy') {
+      await this.runDao.setRestartContinuation(
+        runId,
+        restartContinuationColumn(stored),
+        em,
+      );
+      throw new ConflictException(
+        'RUN_BUSY',
+        'this run is still finishing — your message goes out once it has',
+      );
+    }
+    return continued.item;
   }
 
   private async decline(runId: string): Promise<void> {

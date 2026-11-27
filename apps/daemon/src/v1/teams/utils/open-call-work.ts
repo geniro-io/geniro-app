@@ -99,6 +99,36 @@ export function openNodeTurns(items: readonly Item[]): OpenNodeTurn[] {
 }
 
 /**
+ * The member turns a stop closed only for a continuation to pick up (their
+ * last row is a `continues` one) and that nothing picked up since: the
+ * renderer skips such a row, so the turn still reads as working until a row of
+ * its own ends it.
+ */
+export function turnsLeftForContinuation(
+  items: readonly Item[],
+): OpenNodeTurn[] {
+  const last = new Map<string, { turn: OpenNodeTurn; continues: boolean }>();
+  for (const item of items) {
+    if (item.kind !== 'status' || item.memberId === null) {
+      continue;
+    }
+    const payload = payloadOf(item);
+    const status = stringField(payload, 'status');
+    if (status === null) {
+      continue;
+    }
+    const callId = stringField(payload, 'callId');
+    last.set(JSON.stringify([item.memberId, callId]), {
+      turn: { memberId: item.memberId, callId },
+      continues: status !== 'running' && payload?.continues === true,
+    });
+  }
+  return [...last.values()]
+    .filter((entry) => entry.continues)
+    .map((entry) => entry.turn);
+}
+
+/**
  * The calls a transcript announced and never settled. A call's block is drawn
  * from its `call_started` row and closed by its `call_result`, so one left
  * without a result reads as in flight for as long as the transcript exists.

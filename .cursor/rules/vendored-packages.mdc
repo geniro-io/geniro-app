@@ -11,7 +11,7 @@ alwaysApply: false
 
 - Sentry removed from `common` and the `http-server` exception path; OIDC auth in `http-server` left dormant.
 - `mikroorm` driver swapped from Postgres to `@mikro-orm/sqlite`.
-- `http-server`: `runHttpApp` / `buildHttpServerExtension` gained `host` / `portFallback` / `onListening` (defaults keep upstream's `0.0.0.0`); `setupSwagger` gained an optional `swagger.guard(authorization)`; `utils/openapi-schemas` canonicalizes duplicate components and fails boot on a dangling `$ref`.
+- `http-server`: `runHttpApp` / `buildHttpServerExtension` gained `host` / `portFallback` / `onListening` (defaults keep upstream's `0.0.0.0`); `setupSwagger` gained an optional `swagger.guard(authorization)`; `buildHttpNestApp` passes Nest's `forceCloseConnections: true`, so a request still open at shutdown cannot hold the server's close and the shutdown hooks after it; `utils/openapi-schemas` canonicalizes duplicate components and fails boot on a dangling `$ref`.
 - `http-server`'s `redactSecretQueries` masks the artifact page's `key` parameter; keep that name in any fix that flows back.
 - `mikroorm`'s `BaseDao.hardDeleteIncludingSoftDeleted`: a separate method so the destructive purge is never reachable through an option.
 - `mikroorm`'s `TimestampsEntity` declares its dates with the `DateTimeType` class (the `'datetime'` string makes every loaded entity dirty and re-dates rows on flush).

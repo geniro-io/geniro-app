@@ -43,6 +43,7 @@ import type {
   UsageEventInput,
 } from '../stats.types';
 import { POLLED_SPEND_SEQ } from '../stats.types';
+import { threadFact } from '../utils/activity-facts';
 import { TeamStatsService } from './team-stats.service';
 import type { TeamVersionsService } from './team-versions.service';
 
@@ -147,8 +148,15 @@ describe('TeamStatsService (in-memory sqlite)', () => {
     runId: string,
     overrides: Partial<UsageEventInput> = {},
   ): Promise<void> {
+    await usageDao.recordOnce(turnRow(runId, overrides));
+  }
+
+  function turnRow(
+    runId: string,
+    overrides: Partial<UsageEventInput> = {},
+  ): UsageEventInput {
     nextSeq += 1;
-    await usageDao.recordOnce({
+    return {
       runId,
       memberId: 'lead',
       seq: nextSeq,
@@ -170,7 +178,48 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       timeToRequestMs: null,
       numTurns: null,
       ...overrides,
-    });
+    };
+  }
+
+  const SEED_CHUNK = 500;
+
+  async function insertAll<Entity extends object>(
+    entity: new () => Entity,
+    rows: readonly Entity[],
+  ): Promise<void> {
+    for (let at = 0; at < rows.length; at += SEED_CHUNK) {
+      await orm.em.fork().insertMany(entity, rows.slice(at, at + SEED_CHUNK));
+    }
+  }
+
+  /** The thread rows {@link teamRun} writes, for many runs in a few statements. */
+  async function teamRuns(
+    runIds: readonly string[],
+    { measured = false } = {},
+  ): Promise<void> {
+    await insertAll(
+      UsageActivity,
+      runIds.map((runId) =>
+        Object.assign(new UsageActivity(), threadFact(runId, started), {
+          teamSlug: 'dev-team',
+          teamVersion: 'v1',
+          teamVersionInferred: false,
+          metricsLedger: measured ? true : null,
+        }),
+      ),
+    );
+  }
+
+  /** The ledger rows {@link turn} writes, for many turns in a few statements. */
+  async function turns(
+    rows: readonly (readonly [string, Partial<UsageEventInput>])[],
+  ): Promise<void> {
+    await insertAll(
+      UsageEvent,
+      rows.map(([runId, overrides]) =>
+        Object.assign(new UsageEvent(), turnRow(runId, overrides)),
+      ),
+    );
   }
 
   function outcome(
@@ -231,11 +280,14 @@ describe('TeamStatsService (in-memory sqlite)', () => {
 
   it('counts every run of the team, not a page of them', async () => {
     const RUNS = ID_BATCH + 10;
-    for (let i = 0; i < RUNS; i += 1) {
-      await teamRun(`dev-${i}`);
-      await turn(`dev-${i}`, { costUsd: 2, durationMs: 500 });
-      await turn(`dev-${i}`, { costUsd: 1, durationMs: 500 });
-    }
+    const runIds = Array.from({ length: RUNS }, (_, i) => `dev-${i}`);
+    await teamRuns(runIds);
+    await turns(
+      runIds.flatMap((runId) => [
+        [runId, { costUsd: 2, durationMs: 500 }] as const,
+        [runId, { costUsd: 1, durationMs: 500 }] as const,
+      ]),
+    );
     await teamRun('ops-1', 'ops-team');
     await turn('ops-1', { costUsd: 50 });
 
@@ -666,25 +718,28 @@ describe('TeamStatsService (in-memory sqlite)', () => {
     it("counts each member's calls, tool errors, goals and reopened completions over every measured run", async () => {
       const RUNS = ID_BATCH + 5;
       const ledger = new MetricLedgerDao(orm.em);
-      for (let i = 0; i < RUNS; i += 1) {
-        const runId = `r-${i}`;
-        await teamRun(runId);
-        await activityDao.markMetricsMeasured(runId);
-        await turn(runId, { memberId: 'dev' });
-        await ledger.insertCall({
-          runId,
-          seq: 1,
-          callId: `call-${i}`,
-          occurredAt: started,
-          teamSlug: 'dev-team',
-          caller: 'lead',
-          callee: 'dev',
-          durationMs: i === 0 ? null : 2_000,
-          costUsd: null,
-          turns: 1,
-          ok: i !== 1,
-        });
-      }
+      const runIds = Array.from({ length: RUNS }, (_, i) => `r-${i}`);
+      await teamRuns(runIds, { measured: true });
+      await turns(runIds.map((runId) => [runId, { memberId: 'dev' }] as const));
+      await insertAll(
+        UsageActivity,
+        runIds.map((runId, i) =>
+          Object.assign(new UsageActivity(), {
+            kind: 'call',
+            runId,
+            occurredAt: started,
+            dedupKey: `call:${runId}:call-${i}`,
+            teamSlug: 'dev-team',
+            sourceSeq: 1,
+            memberId: 'lead',
+            peerMemberId: 'dev',
+            durationMs: i === 0 ? null : 2_000,
+            costUsd: null,
+            turns: 1,
+            ok: i !== 1,
+          }),
+        ),
+      );
       for (const [seq, ok] of [
         [10, true],
         [11, false],

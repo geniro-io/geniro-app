@@ -36,6 +36,8 @@ import { createDaemonApis } from './daemon-api';
 import { DaemonClient } from './daemon-client';
 import { DebugPanel } from './debug/debug-panel';
 import { reportUiErrors } from './debug/report-ui-errors';
+import { HeldRunsDialog } from './held-runs/held-runs-dialog';
+import { useHeldRuns } from './held-runs/use-held-runs';
 import type { KnowledgeRequest } from './knowledge/Knowledge';
 import { projectPlace } from './knowledge/knowledge-text';
 import { useKnowledgeCounts } from './knowledge/use-knowledge';
@@ -342,6 +344,7 @@ export function App(): React.JSX.Element {
     () => (handle ? createDaemonApis(handle) : null),
     [handle],
   );
+  const heldRuns = useHeldRuns(apis);
   // The app's ONE capabilities read, provided around every view — the whole
   // answer, and the agent identities out of it — so no screen reads it again.
   const capabilities = useCapabilities(apis?.capabilities ?? null);
@@ -1201,6 +1204,13 @@ export function App(): React.JSX.Element {
               setSettingsSectionOpen(true);
               setView('settings');
             }}
+          />
+          <HeldRunsDialog
+            open={heldRuns.open}
+            runs={heldRuns.runs}
+            answering={heldRuns.answering}
+            error={heldRuns.error}
+            onAnswer={heldRuns.answer}
           />
           {guideOpen ? (
             <div className="fixed inset-0 z-50 bg-background">

@@ -292,6 +292,100 @@ describe('Dialog — Escape', () => {
   });
 });
 
+/**
+ * A dialog the user must answer: no ✕, and neither Escape nor a backdrop click
+ * closes it, while its own controls still do.
+ */
+describe('Dialog — dismissible={false}', () => {
+  function renderFixed(onClose: () => void, dismissible = false): void {
+    act(() => {
+      root.render(
+        <Dialog open onClose={onClose} title="Choose" dismissible={dismissible}>
+          <button type="button">Continue</button>
+        </Dialog>,
+      );
+    });
+  }
+
+  function pressEscape(): void {
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    });
+  }
+
+  function overlay(): HTMLElement {
+    return document.querySelector<HTMLElement>('[role="dialog"]')!;
+  }
+
+  it('shows no corner ✕', () => {
+    renderFixed(vi.fn());
+
+    expect(container.querySelector('[aria-label="Close"]')).toBeNull();
+  });
+
+  it('ignores Escape', () => {
+    const onClose = vi.fn();
+    renderFixed(onClose);
+
+    pressEscape();
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps Escape from reaching the dialog under it', () => {
+    const outer = vi.fn();
+    function Stack({ inner }: { inner: boolean }): React.JSX.Element {
+      return (
+        <Dialog open onClose={outer} title="Outer">
+          <Dialog
+            open={inner}
+            onClose={vi.fn()}
+            dismissible={false}
+            title="Inner">
+            <input aria-label="Inner field" />
+          </Dialog>
+        </Dialog>
+      );
+    }
+    act(() => {
+      root.render(<Stack inner={false} />);
+    });
+    act(() => {
+      root.render(<Stack inner />);
+    });
+
+    pressEscape();
+
+    expect(outer).not.toHaveBeenCalled();
+  });
+
+  it('ignores a backdrop click', () => {
+    const onClose = vi.fn();
+    renderFixed(onClose);
+
+    act(() => overlay().click());
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps the ✕, Escape and the backdrop on a default dialog', () => {
+    const onClose = vi.fn();
+    renderFixed(onClose, true);
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Close"]')!
+        .click(),
+    );
+    pressEscape();
+    act(() => overlay().click());
+
+    expect(onClose).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('Dialog — pickers inside the scrolling body', () => {
   it('a picker opened inside it escapes the body it would be clipped by', () => {
     // The body scrolls (`overflow-y-auto`), so an absolutely-positioned menu is

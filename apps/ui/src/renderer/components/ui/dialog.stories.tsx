@@ -52,6 +52,37 @@ export const Playground: Story = {
   },
 };
 
+/** Holds itself open: no ✕, no Escape, no backdrop — only its own button closes it. */
+export const NotDismissible: Story = {
+  render: () => {
+    function DialogDemo(): React.JSX.Element {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          {!open ? (
+            <Button onClick={() => setOpen(true)}>Reopen dialog</Button>
+          ) : null}
+          <Dialog
+            open={open}
+            onClose={() => setOpen(false)}
+            dismissible={false}
+            title="Answer before you continue">
+            <div className="flex flex-col gap-3">
+              <p className="m-0 text-sm text-muted-foreground">
+                Nothing closes this dialog but the button below.
+              </p>
+              <div className="flex justify-end">
+                <Button onClick={() => setOpen(false)}>Done</Button>
+              </div>
+            </div>
+          </Dialog>
+        </>
+      );
+    }
+    return <DialogDemo />;
+  },
+};
+
 export const LongContent: Story = {
   render: () => {
     function DialogDemo(): React.JSX.Element {

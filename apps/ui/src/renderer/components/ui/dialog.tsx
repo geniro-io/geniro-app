@@ -14,7 +14,8 @@ const FOCUSABLE_SELECTOR =
 
 /**
  * A minimal modal dialog: a dark backdrop + a centered token-styled card.
- * Closes on Escape, backdrop click, or the corner ✕. Owns the modal focus
+ * Closes on Escape, backdrop click, or the corner ✕, unless `dismissible` is
+ * false. Owns the modal focus
  * contract (no dep): on open, focus moves to `initialFocus` when given, else to
  * the first focusable child after the ✕ (the card itself as fallback), Tab
  * cycles inside the card, and close
@@ -34,6 +35,7 @@ export function Dialog({
   flush = false,
   initialFocus,
   coversBrowser = true,
+  dismissible = true,
 }: {
   open: boolean;
   onClose: () => void;
@@ -55,6 +57,11 @@ export function Dialog({
   initialFocus?: React.RefObject<HTMLElement | null>;
   /** False only for a dialog that hosts the in-app browser's own view. */
   coversBrowser?: boolean;
+  /**
+   * False: no corner ✕, and Escape and a backdrop click do nothing. Only the
+   * dialog's own controls close it.
+   */
+  dismissible?: boolean;
 }): React.JSX.Element | null {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   const overlayRef = React.useRef<HTMLDivElement | null>(null);
@@ -75,6 +82,8 @@ export function Dialog({
   // to the top of the stack, over the dialog the user actually opened last.
   const onCloseRef = React.useRef(onClose);
   onCloseRef.current = onClose;
+  const dismissibleRef = React.useRef(dismissible);
+  dismissibleRef.current = dismissible;
   const initialFocusRef = React.useRef(initialFocus);
   initialFocusRef.current = initialFocus;
 
@@ -86,7 +95,9 @@ export function Dialog({
     }
     return pushEscapeLayer({
       close: () => {
-        onCloseRef.current();
+        if (dismissibleRef.current) {
+          onCloseRef.current();
+        }
       },
     });
   }, [open]);
@@ -160,7 +171,7 @@ export function Dialog({
         'app-no-drag fixed inset-0 z-50 flex items-center justify-center',
         !fullScreen && 'p-4',
       )}
-      onClick={onClose}>
+      onClick={dismissible ? onClose : undefined}>
       <div className="absolute inset-0 bg-foreground/30" aria-hidden="true" />
       <div
         ref={cardRef}
@@ -201,15 +212,17 @@ export function Dialog({
             className="min-w-0 flex-1 text-sm font-semibold">
             {title}
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7 shrink-0 text-muted-foreground"
-            aria-label="Close"
-            onClick={onClose}>
-            <X className="size-4" />
-          </Button>
+          {dismissible ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0 text-muted-foreground"
+              aria-label="Close"
+              onClick={onClose}>
+              <X className="size-4" />
+            </Button>
+          ) : null}
         </div>
         {/* The body SCROLLS, so it clips: a picker inside it whose panel opens
             past an edge is cut, and `overflow-x: visible` cannot be restored on

@@ -41,6 +41,7 @@ export function NoticeCard({
       label={settled ? settledLabel : label}
       slot={slot}
       member={heading}
+      labelGivesWay
     />
   );
   return (

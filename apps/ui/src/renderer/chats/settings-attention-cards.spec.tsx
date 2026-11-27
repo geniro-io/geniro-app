@@ -361,6 +361,21 @@ describe('SettingsAttentionCards', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
+  it('cuts the card label before its heading on a narrow line', async () => {
+    findings = [finding('f1'), finding('f2')];
+    await draw();
+
+    const [card] = cards('memory-conflicts');
+    const label = card?.querySelector('[data-slot="settings-attention-label"]');
+    const heading = card?.querySelector(
+      '[data-slot="settings-attention-member"]',
+    );
+    expect(label?.classList.contains('shrink-[100]')).toBe(true);
+    expect(label?.classList.contains('truncate')).toBe(true);
+    expect(label?.getAttribute('title')).toBe('Waiting for your decision');
+    expect(heading?.classList.contains('shrink-0')).toBe(false);
+  });
+
   it('follows the conflicts on a memory change and keeps one card across a reconnect', async () => {
     findings = [finding('f1'), finding('f2')];
     await draw();

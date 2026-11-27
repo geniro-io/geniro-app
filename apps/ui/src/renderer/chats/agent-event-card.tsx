@@ -184,6 +184,7 @@ export function EventLine({
   handle = null,
   member = null,
   waiting = false,
+  labelGivesWay = false,
 }: {
   icon: LucideIcon;
   tone: EventTone;
@@ -192,6 +193,7 @@ export function EventLine({
   handle?: string | null;
   member?: string | null;
   waiting?: boolean;
+  labelGivesWay?: boolean;
 }): React.JSX.Element {
   const Icon = icon;
   return (
@@ -200,7 +202,13 @@ export function EventLine({
         aria-hidden="true"
         className={cn('size-3.5 shrink-0', ICON_TONE[tone])}
       />
-      <span data-slot={`${slot}-label`} className="shrink-0 font-medium">
+      <span
+        data-slot={`${slot}-label`}
+        title={labelGivesWay ? label : undefined}
+        className={cn(
+          'font-medium',
+          labelGivesWay ? 'min-w-0 shrink-[100] truncate' : 'shrink-0',
+        )}>
         {label}
       </span>
       {handle === null ? null : (

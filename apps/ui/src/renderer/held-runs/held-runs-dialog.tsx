@@ -24,13 +24,16 @@ export function HeldRunsDialog({
   error: string | null;
   onAnswer: (continueRunIds: string[], declineRunIds: string[]) => void;
 }): React.JSX.Element | null {
+  const continueAllRef = React.useRef<HTMLButtonElement>(null);
   return (
     <Dialog
       open={open}
       onClose={() => undefined}
       dismissible={false}
+      initialFocus={continueAllRef}
       title={titleFor(runs.length)}>
       <HeldRunsChoice
+        continueAllRef={continueAllRef}
         runs={runs}
         answering={answering}
         error={error}
@@ -41,11 +44,13 @@ export function HeldRunsDialog({
 }
 
 function HeldRunsChoice({
+  continueAllRef,
   runs,
   answering,
   error,
   onAnswer,
 }: {
+  continueAllRef: React.RefObject<HTMLButtonElement | null>;
   runs: readonly HeldRun[];
   answering: boolean;
   error: string | null;
@@ -131,7 +136,10 @@ function HeldRunsChoice({
               onClick={() => setChoosing(true)}>
               Choose…
             </Button>
-            <Button disabled={answering} onClick={() => onAnswer(allIds, [])}>
+            <Button
+              ref={continueAllRef}
+              disabled={answering}
+              onClick={() => onAnswer(allIds, [])}>
               Continue all
             </Button>
           </>

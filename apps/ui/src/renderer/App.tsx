@@ -942,6 +942,7 @@ export function App(): React.JSX.Element {
                       firstLaunchAgent={chatLaunch}
                       onFirstLaunchHandled={() => setChatLaunch(null)}
                       onActiveRunChange={setOpenRunId}
+                      heldRunIds={heldRuns.runIds}
                       onTitleChange={setChatTitle}
                       onOpenTerminal={openTerminal}
                       onFolderChange={setChatFolder}

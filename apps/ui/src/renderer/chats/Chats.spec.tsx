@@ -3106,6 +3106,33 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     expect(secondRow().textContent).toContain('needs more info');
   });
 
+  it('reads a team run the daemon holds after a crash as waiting on the user, not as working', async () => {
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: 'Second chat', status: 'running' },
+    ]);
+    const onWaitingChange = vi.fn();
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      heldRunIds: new Set(['r2']),
+      onWaitingChange,
+    });
+    await clickRun(container, 'My chat');
+
+    const secondRow = [
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes('Second chat'))!;
+    expect(secondRow.textContent).toContain('needs more info');
+    expect(secondRow.textContent).toContain('waiting for you to continue it');
+    expect(secondRow.textContent).not.toContain('running');
+    expect(secondRow.textContent).not.toContain('Working…');
+    expect(onWaitingChange).toHaveBeenLastCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ runId: 'r2', state: 'asking' }),
+      ]),
+    );
+  });
+
   it('stops naming the work when the run STOPS, even carrying an activity', async () => {
     // A null activity was the only thing that ever cleared the label, so a
     // terminal status arriving alongside a non-null one left the run named

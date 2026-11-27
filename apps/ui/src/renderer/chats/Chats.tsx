@@ -724,6 +724,7 @@ const NO_PARAMETER_VALUES: Record<string, string> = {};
  * common case — so the memo would only ever hit once a directory was stored.
  */
 const EMPTY_RECENT_CONFIG_DIRS: readonly string[] = [];
+const NO_HELD_RUNS: ReadonlySet<string> = new Set();
 
 /** How long a link's ask to open a call card waits for the card to be drawn. */
 const OPEN_CALL_WAIT_MS = 10_000;
@@ -805,6 +806,7 @@ export function Chats({
   onFolderChange,
   onPhoneDetailChange,
   onWaitingChange,
+  heldRunIds = NO_HELD_RUNS,
   phoneHomeSignal = 0,
   firstLaunchAgent = null,
   onFirstLaunchHandled,
@@ -915,6 +917,11 @@ export function Chats({
    * the shell's, and this component is the one holding the rows they read.
    */
   onWaitingChange?: (readings: readonly WaitReading[]) => void;
+  /**
+   * The team runs a crash cut off that wait for the user's choice in the
+   * start-up dialog: each row reads as waiting on the user, not as working.
+   */
+  heldRunIds?: ReadonlySet<string>;
   /**
    * Bumped by the shell when the Chats tab is pressed while it is on show —
    * the phone's way back from a detail page to the chat list.
@@ -6813,13 +6820,23 @@ export function Chats({
             // whether or not this client has drawn it yet.
             awaitingAnswer:
               awaitingAnswer.size > 0 ||
-              (activeRun.awaiting !== null && activeRun.awaiting !== undefined),
+              (activeRun.awaiting !== null &&
+                activeRun.awaiting !== undefined) ||
+              heldRunIds.has(activeRun.id),
             subagentRunning,
             heldForBackgroundWork: holding.has(activeRun.id),
             teamLeadsDone: rootsIdle.has(activeRun.id),
           })
         : 'pending',
-    [activeRun, streaming, awaitingAnswer, subagentRunning, holding, rootsIdle],
+    [
+      activeRun,
+      streaming,
+      awaitingAnswer,
+      subagentRunning,
+      holding,
+      rootsIdle,
+      heldRunIds,
+    ],
   );
   const activeRunStatus = useMemo(
     () =>
@@ -6829,7 +6846,9 @@ export function Chats({
             streaming,
             awaitingAnswer:
               awaitingAnswer.size > 0 ||
-              (activeRun.awaiting !== null && activeRun.awaiting !== undefined),
+              (activeRun.awaiting !== null &&
+                activeRun.awaiting !== undefined) ||
+              heldRunIds.has(activeRun.id),
             subagentRunning,
             heldForBackgroundWork: holding.has(activeRun.id),
             // The RUN ROW's count, not this thread's transcript — the same
@@ -6852,6 +6871,7 @@ export function Chats({
       holding,
       shellsOut,
       delegatesOut,
+      heldRunIds,
     ],
   );
   /**
@@ -9316,7 +9336,7 @@ export function Chats({
       displayRunStatus({
         status: run.status,
         streaming: liveTurn,
-        awaitingAnswer: run.awaiting !== null,
+        awaitingAnswer: run.awaiting !== null || heldRunIds.has(run.id),
         // Row-carried like the hold below, which is the whole point of it
         // being on the wire — see this callback's own doc.
         shellsRunning: shellsOut.has(run.id),
@@ -9334,7 +9354,7 @@ export function Chats({
     // `delegatesOut` too: a turn that settles with sub-agents still out moves
     // only that set, and without it every thread the user was not looking at
     // kept the old reading — `completed` over a hold, `held` after it ended.
-    [holding, shellsOut, delegatesOut],
+    [holding, shellsOut, delegatesOut, heldRunIds],
   );
   /**
    * That same reading taken WITHOUT the live plane — what the row would say if
@@ -9381,14 +9401,14 @@ export function Chats({
       displayRunStatus({
         status: run.status,
         streaming: false,
-        awaitingAnswer: run.awaiting !== null,
+        awaitingAnswer: run.awaiting !== null || heldRunIds.has(run.id),
         // The DELEGATE hold stays: a sub-agent still out means the agent's work
         // is genuinely unfinished, and announcing it as done is the defect this
         // whole vocabulary was built to prevent.
         heldForBackgroundWork: holding.has(run.id),
         teamLeadsDone: rootsIdle.has(run.id),
       }),
-    [holding, rootsIdle],
+    [holding, rootsIdle, heldRunIds],
   );
   /**
    * The same per-run reading for the two consumers that ask "has this thread
@@ -10228,7 +10248,10 @@ export function Chats({
                                   createdAt={run.createdAt}
                                   archivedAt={run.archivedAt ?? null}
                                   activity={activities.get(run.id) ?? null}
-                                  awaiting={run.awaiting}
+                                  awaiting={
+                                    run.awaiting ??
+                                    (heldRunIds.has(run.id) ? 'continue' : null)
+                                  }
                                   monitors={run.monitorsOpen}
                                   agentKind={run.agentKind}
                                   taskIdentifier={run.taskIdentifier}

@@ -92,6 +92,12 @@ describe('HeldRunsDialog', () => {
     ).toEqual(['Ship the login flow', 'Untitled run', 'Triage the inbox']);
   });
 
+  it('opens with Continue all focused, so Enter never declines', () => {
+    renderDialog();
+
+    expect(document.activeElement).toBe(button('Continue all'));
+  });
+
   it('Continue all answers every run as continued', () => {
     const onAnswer = vi.fn();
     renderDialog({ onAnswer });

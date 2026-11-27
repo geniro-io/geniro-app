@@ -87,6 +87,7 @@ describe('useHeldRuns', () => {
     expect(teams.listHeldRuns).toHaveBeenCalledTimes(1);
     expect(latest?.open).toBe(true);
     expect(latest?.runs).toEqual([RUN]);
+    expect([...(latest?.runIds ?? [])]).toEqual([RUN.runId]);
 
     await mount(apis);
     expect(teams.listHeldRuns).toHaveBeenCalledTimes(1);

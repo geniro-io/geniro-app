@@ -120,11 +120,13 @@ describe('ArtifactDialog — a picture the page shows, then the page', () => {
     await postFromFrame({ type: 'picture', src: PICTURE, alt: 'Before' });
     expect(pictureShown()).toBe(true);
 
-    await act(async () => {
-      document.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
-      );
-    });
+    await afterPopstate(
+      () =>
+        document.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+        ),
+      'the picture’s Escape',
+    );
     expect(pictureShown()).toBe(false);
     expect(onClose).not.toHaveBeenCalled();
     expect(document.querySelector('iframe')).not.toBeNull();

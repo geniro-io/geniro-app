@@ -565,7 +565,7 @@ describe('Dialog — full screen', () => {
   it('gives the ✕ a 44px hit area and pads the header by the safe area', async () => {
     await renderViewer({ onClose: vi.fn() });
 
-    expect(closeButton().className).toContain('size-11');
+    expect(closeButton().className).toContain('size-[44px]');
     expect(closeButton().parentElement!.className).toContain(
       'env(safe-area-inset-top)',
     );
@@ -674,6 +674,35 @@ describe('Dialog — full screen', () => {
     await afterPopstate(() => history.back(), 'the platform back');
 
     expect(closeInner).toHaveBeenCalledTimes(1);
+    expect(closeOuter).not.toHaveBeenCalled();
+  });
+
+  it('closes only a card dialog opened inside it on Back, then the full-screen one', async () => {
+    const closeOuter = vi.fn();
+    const closePicture = vi.fn();
+    function PictureOverPage({
+      picture,
+    }: {
+      picture: boolean;
+    }): React.JSX.Element {
+      return (
+        <Dialog open fullScreen onClose={closeOuter} title="Page">
+          <Dialog open={picture} onClose={closePicture} title="Picture">
+            image
+          </Dialog>
+        </Dialog>
+      );
+    }
+    await act(async () => {
+      root.render(<PictureOverPage picture={false} />);
+    });
+    await act(async () => {
+      root.render(<PictureOverPage picture />);
+    });
+
+    await afterPopstate(() => history.back(), 'the platform back');
+
+    expect(closePicture).toHaveBeenCalledTimes(1);
     expect(closeOuter).not.toHaveBeenCalled();
   });
 

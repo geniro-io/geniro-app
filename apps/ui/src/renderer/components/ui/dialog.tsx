@@ -17,6 +17,9 @@ const FOCUSABLE_SELECTOR =
 /** The history-entry owner of a full-screen dialog (see `usePhoneBackEntry`). */
 const FULL_SCREEN_BACK_OWNER = 'full-screen-dialog';
 
+/** True inside a full-screen dialog, whose Back must close a dialog over it first. */
+const InFullScreenDialog = React.createContext(false);
+
 /**
  * A minimal modal dialog: a dark backdrop + a centered token-styled card.
  * Closes on Escape, backdrop click, or the corner ✕, unless `dismissible` is
@@ -36,9 +39,10 @@ const FULL_SCREEN_BACK_OWNER = 'full-screen-dialog';
  * Shown in the top layer, so a viewport popover it was opened from (the answer
  * popover's question card) cannot paint over it.
  *
- * A dismissible full-screen dialog holds a browser history entry while open, so
- * the platform's Back closes it; the ✕, Escape and the backdrop pop that entry
- * rather than close beside it, so every way out runs `onClose` exactly once.
+ * A dismissible full-screen dialog, and any dismissible dialog opened inside one,
+ * holds a browser history entry while open, so the platform's Back closes the
+ * top one; the ✕, Escape and the backdrop pop that entry rather than close
+ * beside it, so every way out runs `onClose` exactly once.
  */
 export function Dialog({
   open,
@@ -79,9 +83,10 @@ export function Dialog({
   dismissible?: boolean;
 }): React.JSX.Element | null {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
+  const insideFullScreen = React.useContext(InFullScreenDialog);
   const close = usePhoneBackEntry(
     FULL_SCREEN_BACK_OWNER,
-    open && fullScreen && dismissible,
+    open && dismissible && (fullScreen || insideFullScreen),
     onClose,
   );
   // The Escape layer must not re-register on a render: that would move an OUTER
@@ -235,7 +240,7 @@ export function Dialog({
               size="icon"
               className={cn(
                 'shrink-0 text-muted-foreground',
-                fullScreen ? 'size-11' : 'size-7',
+                fullScreen ? 'size-[44px]' : 'size-7',
               )}
               aria-label="Close"
               onClick={close}>
@@ -278,7 +283,9 @@ export function Dialog({
               'min-h-0 flex-1 overflow-y-auto break-words',
               !fullScreen && !flush && 'px-5 py-4',
             )}>
-            {children}
+            <InFullScreenDialog.Provider value={fullScreen || insideFullScreen}>
+              {children}
+            </InFullScreenDialog.Provider>
           </div>
         </MenuAnchorContext.Provider>
       </div>

@@ -6370,6 +6370,102 @@ describe('where a session’s detached commands run', () => {
     ]);
   });
 
+  it('records the group of a command holding quotes, which the table shows eval-escaped and then unquoted', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(
+        200,
+        100,
+        200,
+        `/bin/zsh -c eval 'perl -e '"'"'sleep 300'"'"'' < /dev/null`,
+      ),
+      row(201, 200, 200, 'perl -e sleep 300', 2_000_000),
+    ]);
+    background(child, 'b1', 't1', "perl -e 'sleep 300'");
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      {
+        pgid: 200,
+        members: [
+          { pid: 200, startedAt: 1_000_000 },
+          { pid: 201, startedAt: 2_000_000 },
+        ],
+      },
+    ]);
+  });
+
+  it('records the group a program the command started leads of its own, such as a browser', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, "/bin/zsh -c eval 'node e2e.js'"),
+      row(201, 200, 200, 'node e2e.js'),
+      row(202, 201, 202, 'Google Chrome for Testing --headless', 3_000_000),
+    ]);
+    background(child, 'b1', 't1', 'node e2e.js');
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)?.map((group) => group.pgid)).toEqual([
+      200, 202,
+    ]);
+  });
+
+  it('records a heredoc’s program once the shell has exec’d it, by its whole line alone', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, 'perl -'),
+      row(300, 100, 300, 'perl -e sleep 9'),
+    ]);
+    background(
+      child,
+      'b1',
+      't1',
+      '/bin/zsh -lc "perl - <<\'PL\'\nsleep 361\nPL"',
+    );
+    await afterReading(reads, 1);
+
+    expect(session.recordedGroupsOf('t1')?.map((group) => group.pgid)).toEqual([
+      200,
+    ]);
+  });
+
+  it('never records a heredoc’s program for it where another running command reads as that process', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, 'perl -'),
+    ]);
+    background(child, 'b1', 't1', "perl - <<'PL'\nsleep 361\nPL");
+    background(child, 'b2', 't2', 'perl - < job.pl');
+    await afterReading(reads, 1);
+
+    expect(session.recordedGroupsOf('t1')).toEqual([]);
+    expect(session.recordedGroupsOf('t2')?.map((group) => group.pgid)).toEqual([
+      200,
+    ]);
+  });
+
+  it('never records for a command a process another running command already holds', async () => {
+    let table = [
+      ...CLI_AND_MCP,
+      row(300, 100, 300, '/bin/sh -c pnpm dev'),
+      row(301, 300, 300, 'node /opt/pnpm dev'),
+    ];
+    const { session, child, reads } = openRecordingSession(() => table);
+    background(child, 'b1', 't1', 'pnpm dev');
+    await afterReading(reads, 1);
+
+    table = [...table, row(400, 100, 400, 'node /opt/pnpm dev', 4_000_000)];
+    background(child, 'b2', 't2', 'cd web\npnpm dev');
+    await afterReading(reads, 2);
+
+    expect(session.recordedGroupsOf('t2')?.map((group) => group.pgid)).toEqual([
+      400,
+    ]);
+    expect(session.recordedGroupsOf('t1')?.map((group) => group.pgid)).toEqual([
+      300,
+    ]);
+  });
+
   it('finds a command whose text is not in the table through the CLI’s own record', async () => {
     const heredoc = "python3 << 'PY'\nprint(1)\nPY";
     const { session, child, reads } = openRecordingSession(

@@ -98,6 +98,25 @@ export function isGroupAnchored(
 }
 
 /**
+ * The processes still running in `groups`, with every process they have
+ * started since, wherever its own group is.
+ */
+export function groupSubtree(
+  rows: readonly PlainProcess[],
+  groups: readonly RecordedGroup[],
+): Set<number> {
+  const pgids = new Set(groups.map((group) => group.pgid));
+  return new Set(
+    rows
+      .filter((row) => pgids.has(row.pgid))
+      .flatMap((row) => [
+        row.pid,
+        ...descendantsOf(rows, row.pid).map(({ pid }) => pid),
+      ]),
+  );
+}
+
+/**
  * Every process descending from `rootPid`, at any depth.
  *
  * Depth matters and is the reason this walks rather than filtering on `ppid`:
@@ -264,6 +283,10 @@ function normalizeCommand(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function withoutQuoting(value: string): string {
+  return value.replace(/['"\\]/g, '');
+}
+
 /**
  * Every string a command the agent wrote can appear as in the process table —
  * the command itself first, then what its shell actually leaves running.
@@ -288,18 +311,31 @@ function normalizeCommand(value: string): string {
  * the run.
  */
 export function commandNeedles(command: string): string[] {
-  const written = normalizeCommand(command);
-  const needles = [written];
-  const inner = unwrapShell(written);
-  if (inner !== null) {
-    needles.push(inner);
-  }
-  for (const segment of (inner ?? written).split(SHELL_SEPARATORS)) {
-    const core = commandCore(segment);
-    if (core !== null) {
-      needles.push(core);
-    }
-  }
+  const { whole, parts } = needleSets(command);
+  return [...new Set([...whole, ...parts])];
+}
+
+/**
+ * {@link commandNeedles} in two sets: the command's whole text (as written, and
+ * the script a shell was handed), then the single commands it runs.
+ */
+function needleSets(command: string): { whole: string[]; parts: string[] } {
+  const body = unwrapShell(command.trim());
+  return {
+    whole: specific([
+      normalizeCommand(command),
+      ...(body === null ? [] : [normalizeCommand(body)]),
+    ]),
+    parts: specific(
+      commandSegments(body ?? command).flatMap((segment) => {
+        const core = commandCore(normalizeCommand(segment));
+        return core === null ? [] : [core];
+      }),
+    ),
+  };
+}
+
+function specific(needles: readonly string[]): string[] {
   return [...new Set(needles)].filter(
     (needle) => needle.length >= MIN_NEEDLE_CHARS,
   );
@@ -310,19 +346,107 @@ export function commandNeedles(command: string): string[] {
  * needle that matches anything, each kept only when no ancestor of it matched
  * too — the wrapper and what it wraps are one command, stopped through the top.
  *
+ * The table never carries the agent's quoting as written: claude evals the
+ * command from a single-quoted string (each `'` written `'"'"'`), and the
+ * program a shell execs shows its argv with no quotes at all. So when no needle
+ * matches as written, the needles and the rows are compared again with their
+ * quoting removed.
+ *
  * `owned` must already be confined to one run's own process tree: the derived
- * needles are looser than the command (see {@link commandNeedles}).
+ * needles are looser than the command (see {@link commandNeedles}). A single
+ * command of a script is looser still, so it never reaches a process that one
+ * of `others` — the commands running beside it — matches, nor what that
+ * process started.
  */
 export function commandTargets(
   owned: readonly ProcessRow[],
   command: string,
+  others: readonly string[] = [],
 ): number[] {
-  for (const needle of commandNeedles(command)) {
-    const matched = new Set(pidsRunningCommand(owned, needle));
+  const unquoted = owned.map((row) => ({
+    ...row,
+    args: withoutQuoting(row.args),
+  }));
+  const { whole, parts } = needleSets(command);
+  let held: Set<number> | null = null;
+  const apart = (rows: readonly ProcessRow[]): readonly ProcessRow[] => {
+    held ??= heldByOthers(owned, others);
+    const taken = held;
+    return rows.filter((row) => !taken.has(row.pid));
+  };
+  const unquote = (needles: readonly string[]): string[] =>
+    specific(needles.map(withoutQuoting));
+  const readings: [() => readonly ProcessRow[], string[]][] = [
+    [() => owned, whole],
+    [() => apart(owned), parts],
+    [() => unquoted, unquote(whole)],
+    [() => apart(unquoted), unquote(parts)],
+  ];
+  for (const [rows, needles] of readings) {
+    const targets = topMatches(rows(), needles);
+    if (targets.length > 0) {
+      return targets;
+    }
+  }
+  return [];
+}
+
+/**
+ * The programs a command feeds a heredoc to, as `ps` shows each once the
+ * shell has exec'd it (`perl -`, `node -`): nothing of the script is left in
+ * the table. Too bare for a Stop, which {@link commandTargets} never reads them
+ * for; a caller recording where a command runs may, through
+ * {@link pidsRunningProgram}.
+ */
+export function heredocPrograms(command: string): string[] {
+  const body = unwrapShell(command.trim());
+  return specific(
+    commandSegments(body ?? command).flatMap((segment) => {
+      const read = readSegment(normalizeCommand(segment));
+      return read?.feedsHeredoc === true ? [read.text] : [];
+    }),
+  );
+}
+
+/** The rows whose whole command line is `program`, by name or by path. */
+export function pidsRunningProgram(
+  rows: readonly ProcessRow[],
+  program: string,
+): number[] {
+  return rows
+    .filter((row) => {
+      const line = normalizeCommand(row.args);
+      return line === program || line.endsWith(`/${program}`);
+    })
+    .map((row) => row.pid);
+}
+
+/** What any of `others` matches among `owned`, with everything it started. */
+function heldByOthers(
+  owned: readonly ProcessRow[],
+  others: readonly string[],
+): Set<number> {
+  return new Set(
+    others
+      .flatMap((other) => commandTargets(owned, other))
+      .flatMap((pid) => [
+        pid,
+        ...descendantsOf(owned, pid).map((row) => row.pid),
+      ]),
+  );
+}
+
+/** The matches of the first needle that matches anything, wrappers over what they wrap. */
+function topMatches(
+  rows: readonly ProcessRow[],
+  needles: readonly string[],
+): number[] {
+  for (const needle of needles) {
+    const matched = new Set(pidsRunningCommand(rows, needle));
     if (matched.size === 0) {
       continue;
     }
-    const parentOf = new Map(owned.map((row) => [row.pid, row.ppid]));
+    const parentOf = new Map(rows.map((row) => [row.pid, row.ppid]));
     return [...matched].filter((pid) => {
       const seen = new Set<number>([pid]);
       let parent = parentOf.get(pid);
@@ -374,17 +498,55 @@ function unwrapShell(command: string): string | null {
   }
   const [, quote, raw = ''] = match;
   // `'\''` is how a single quote is written inside a single-quoted string.
-  const body = quote === "'" ? raw.replace(/'\\''/g, "'") : raw;
-  return normalizeCommand(body);
+  return quote === "'" ? raw.replace(/'\\''/g, "'") : raw;
 }
 
 /**
+ * The commands a script runs one after another: each line, split at the
+ * separators within it. A shell execs the last line of a script in place of
+ * itself, so only that line's own text is left in the table. A heredoc's body
+ * is input, not commands, and is skipped to its delimiter.
+ */
+function commandSegments(script: string): string[] {
+  const segments: string[] = [];
+  let heredocEnd: string | null = null;
+  for (const line of script.replace(/\\\r?\n/g, ' ').split(/\r?\n/)) {
+    if (heredocEnd !== null) {
+      if (line.trim() === heredocEnd) {
+        heredocEnd = null;
+      }
+      continue;
+    }
+    heredocEnd = HEREDOC_START.exec(line)?.[2] ?? null;
+    segments.push(...line.split(SHELL_SEPARATORS));
+  }
+  return segments;
+}
+
+/** `<<WORD`, `<< 'WORD'`, `<<-"WORD"` — never a `<<<` here-string. */
+const HEREDOC_START = /(?<!<)<<-?\s*(['"]?)([A-Za-z0-9_]+)\1/;
+
+/**
  * What a segment leaves running once `nohup`, `env` and the shell have exec'd
- * away: a leading `nohup`, the `env [-i] [-u NAME]…` and `NAME=value`
- * assignments dropped, and everything from the first redirection on cut, since
- * `ps` never shows one.
+ * away (see {@link readSegment}). None for a heredoc: what is left of it is a
+ * bare program name, which would match every other run of that program in the
+ * tree.
  */
 function commandCore(segment: string): string | null {
+  const read = readSegment(segment);
+  return read === null || read.feedsHeredoc ? null : read.text;
+}
+
+/**
+ * A segment as `ps` shows it once `nohup`, `env` and the shell have exec'd
+ * away: a leading `nohup`, the `env [-i] [-u NAME]…` and `NAME=value`
+ * assignments dropped, and everything from the first redirection or a `#`
+ * comment on cut, since `ps` never shows either — outside quotes only.
+ * `feedsHeredoc` when the cut was a heredoc's `<<`.
+ */
+function readSegment(
+  segment: string,
+): { text: string; feedsHeredoc: boolean } | null {
   const words = segment.trim().split(' ');
   if (words[0] === 'nohup') {
     words.shift();
@@ -402,15 +564,40 @@ function commandCore(segment: string): string | null {
     words.shift();
   }
   const rest: string[] = [];
+  let quote: string | null = null;
+  let feedsHeredoc = false;
   for (const word of words) {
-    if (/^\d*[<>]/.test(word)) {
-      break;
+    if (quote === null) {
+      if (/^\d*<<(?!<)/.test(word)) {
+        feedsHeredoc = true;
+        break;
+      }
+      if (word.startsWith('#') || /^\d*[<>]/.test(word)) {
+        break;
+      }
     }
     rest.push(word);
+    quote = quoteOpenAfter(word, quote);
   }
   const [program] = rest;
   if (program === undefined || program === '' || SHELL_BUILTINS.has(program)) {
     return null;
   }
-  return rest.join(' ');
+  return { text: rest.join(' '), feedsHeredoc };
+}
+
+/** The quote still open once `word` is read, from `open` before it. */
+function quoteOpenAfter(word: string, open: string | null): string | null {
+  let quote = open;
+  for (let i = 0; i < word.length; i += 1) {
+    const char = word[i];
+    if (char === '\\' && quote !== "'") {
+      i += 1;
+    } else if (quote === null && (char === "'" || char === '"')) {
+      quote = char;
+    } else if (char === quote) {
+      quote = null;
+    }
+  }
+  return quote;
 }

@@ -825,6 +825,27 @@ describe('ChatShellsService.kill', () => {
       expect(machine.signals).toEqual([]);
     });
 
+    it('never stops an open background command through one line of a script whose own process is gone', async () => {
+      machine.processes = [
+        { pid: 100, ppid: 1, args: 'codex app-server' },
+        { pid: 300, ppid: 100, args: '/bin/sh -c pnpm dev' },
+        { pid: 301, ppid: 300, args: 'node /opt/pnpm dev' },
+      ];
+      const { service: svc } = service(
+        [lifecycle(1, 'shell_open', 'call-bg')],
+        [
+          { id: 'call-fg', command: 'cd web\npnpm dev' },
+          { id: 'call-bg', command: 'pnpm dev' },
+        ],
+        { roots: [100], answered: ['call-bg'] },
+      );
+
+      const answer = await svc.kill('run-1', 'call-fg');
+
+      expect(answer.killed).toBe(false);
+      expect(machine.signals).toEqual([]);
+    });
+
     it("says so when the command is not among the run's processes", async () => {
       machine.processes = TABLE.filter((row) => row.pid !== 102);
       const { service: svc } = service(

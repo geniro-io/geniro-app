@@ -369,9 +369,13 @@ export class ChatShellsService {
     }
     const table = await listProcesses();
     const owned = roots.flatMap((root) => descendantsOf(table, root.pid));
+    const others = (await this.fold(runId)).flatMap((row) =>
+      row.id === callId || row.command === null ? [] : [row.command],
+    );
     const targets = commandTargets(
       this.recordedScope(runId, callId, table, owned),
       command,
+      others,
     );
     if (targets.length === 0) {
       return null;

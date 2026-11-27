@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   commandLiveness,
   commandNeedles,
+  commandTargets,
   descendantsOf,
   endedRecordOf,
+  heredocPrograms,
   isCommandRunning,
   parseProcessRows,
+  pidsRunningProgram,
   type ProcessRow,
   recordedPidsRunning,
 } from './process-descendants';
@@ -225,8 +228,154 @@ describe('commandNeedles', () => {
     ]);
   });
 
+  it('reads each line of a script as a command, and a heredoc’s body as none', () => {
+    expect(
+      commandNeedles(
+        "cd app\npnpm install\npython3 - <<'PY'\nprint(1)\nPY\npnpm dev",
+      ),
+    ).toEqual([
+      "cd app pnpm install python3 - <<'PY' print(1) PY pnpm dev",
+      'pnpm install',
+      'pnpm dev',
+    ]);
+  });
+
+  it('cuts a trailing comment, never a # inside quotes or a word', () => {
+    expect(commandNeedles('grep -r "#todo" src # find todos')).toEqual([
+      'grep -r "#todo" src # find todos',
+      'grep -r "#todo" src',
+    ]);
+    expect(commandNeedles('curl http://host/#top')).toEqual([
+      'curl http://host/#top',
+    ]);
+  });
+
   it('keeps nothing too short to be specific', () => {
     expect(commandNeedles('ls')).toEqual([]);
+  });
+});
+
+describe('commandTargets', () => {
+  // The shapes measured under claude's Bash tool: the command is eval'd from a
+  // single-quoted string, each quote of it written as '"'"', and the program
+  // it execs shows its argv with no quotes at all.
+  const claudeShell = (command: string): string =>
+    `/bin/zsh -c source /Users/u/.claude/shell-snapshots/snapshot-zsh-1.sh 2>/dev/null || true && eval '${command.replace(/'/g, `'"'"'`)}' < /dev/null && pwd -P >| /tmp/claude-1-cwd`;
+
+  it('finds a command that holds quotes, through the shell claude evals it in', () => {
+    const tree: ProcessRow[] = [
+      { pid: 200, ppid: 100, args: claudeShell("perl -e 'sleep 327'") },
+      { pid: 201, ppid: 200, args: 'perl -e sleep 327' },
+    ];
+
+    expect(commandTargets(tree, "perl -e 'sleep 327'")).toEqual([200]);
+  });
+
+  it('finds a command with escaped double quotes once its shell has gone', () => {
+    const tree: ProcessRow[] = [
+      { pid: 201, ppid: 1, args: 'perl -e print "hi"; sleep 99' },
+    ];
+
+    expect(commandTargets(tree, 'perl -e "print \\"hi\\"; sleep 99"')).toEqual([
+      201,
+    ]);
+  });
+
+  it('finds a quoted command a shell was handed whole, once that shell has exec’d it', () => {
+    const tree: ProcessRow[] = [
+      { pid: 201, ppid: 100, args: 'perl -e sleep 300' },
+    ];
+
+    expect(commandTargets(tree, `/bin/zsh -lc "perl -e 'sleep 300'"`)).toEqual([
+      201,
+    ]);
+  });
+
+  it('takes only what the text as written matches when it matches anything', () => {
+    const tree: ProcessRow[] = [
+      { pid: 300, ppid: 100, args: "/bin/sh -c perl -e 'x y z'" },
+      { pid: 400, ppid: 100, args: 'perl -e x y z' },
+    ];
+
+    expect(commandTargets(tree, "perl -e 'x y z'")).toEqual([300]);
+  });
+
+  it('finds the last line of a script a shell has exec’d in its place', () => {
+    const tree: ProcessRow[] = [
+      { pid: 201, ppid: 100, args: 'node server.js --port 4000' },
+    ];
+
+    expect(
+      commandTargets(tree, "/bin/zsh -lc 'cd app\nnode server.js --port 4000'"),
+    ).toEqual([201]);
+    expect(
+      commandTargets(tree, 'cd app\nnode server.js \\\n  --port 4000'),
+    ).toEqual([201]);
+  });
+
+  it('finds a command written with a trailing comment, which the table never shows', () => {
+    const tree: ProcessRow[] = [
+      { pid: 201, ppid: 100, args: 'node server.js --port 4000' },
+    ];
+
+    expect(
+      commandTargets(tree, 'node server.js --port 4000 # the dev server'),
+    ).toEqual([201]);
+  });
+
+  it('never takes a single command of a script through a process another running command matches', () => {
+    const tree: ProcessRow[] = [
+      { pid: 300, ppid: 100, args: '/bin/sh -c pnpm dev' },
+      { pid: 301, ppid: 300, args: 'node /opt/pnpm dev' },
+    ];
+
+    expect(commandTargets(tree, 'cd web\npnpm dev')).toEqual([300]);
+    expect(commandTargets(tree, 'cd web\npnpm dev', ['pnpm dev'])).toEqual([]);
+    expect(commandTargets(tree, 'pnpm dev', ['cd web\npnpm dev'])).toEqual([
+      300,
+    ]);
+  });
+
+  it('never reads a heredoc as the bare program it feeds, which another command may run too', () => {
+    const tree: ProcessRow[] = [
+      { pid: 400, ppid: 100, args: 'perl -e sleep 9' },
+    ];
+
+    expect(commandTargets(tree, "perl - <<'PL'\nprint 1\nPL")).toEqual([]);
+  });
+
+  it('matches nothing for a command that is only quoting, or that nothing runs', () => {
+    const tree: ProcessRow[] = [
+      { pid: 300, ppid: 100, args: claudeShell('tail -f /dev/zero') },
+      { pid: 301, ppid: 300, args: 'tail -f /dev/zero' },
+    ];
+
+    expect(commandTargets(tree, "''")).toEqual([]);
+    expect(commandTargets(tree, '"\\"\\""')).toEqual([]);
+    expect(commandTargets(tree, "grep -r 'nothing here'")).toEqual([]);
+  });
+});
+
+describe('heredocPrograms', () => {
+  it('names the program a heredoc feeds, as the table shows it once the shell has exec’d it', () => {
+    expect(
+      heredocPrograms('/bin/zsh -lc "cd /tmp\nperl - <<\'PL\'\nsleep 1\nPL"'),
+    ).toEqual(['perl -']);
+    expect(heredocPrograms('node - <<JS\nsetTimeout(() => {}, 9)\nJS')).toEqual(
+      ['node -'],
+    );
+    expect(heredocPrograms('perl -e "sleep 1" # no heredoc')).toEqual([]);
+  });
+
+  it('takes a row only by its whole line, by name or by path', () => {
+    const rows: ProcessRow[] = [
+      { pid: 1, ppid: 0, args: 'perl -' },
+      { pid: 2, ppid: 0, args: '/usr/bin/perl -' },
+      { pid: 3, ppid: 0, args: 'perl -e sleep 9' },
+      { pid: 4, ppid: 0, args: 'superl -' },
+    ];
+
+    expect(pidsRunningProgram(rows, 'perl -')).toEqual([1, 2]);
   });
 });
 

@@ -101,10 +101,17 @@ export function SignInAction({
         ref={buttonRef}
         type="button"
         size="sm"
-        className={cn(compact && '-my-0.5 h-5 px-2 text-xs', className)}
+        title={`Sign in to ${label}`}
+        className={cn(
+          'max-w-full',
+          compact && '-my-0.5 h-5 px-2 text-xs',
+          className,
+        )}
         disabled={api === null || signIn.starting}
         onClick={() => signIn.start(destinationId)}>
-        {signIn.starting ? 'Starting sign-in…' : `Sign in to ${label}`}
+        <span data-slot="sign-in-action-label" className="truncate">
+          {signIn.starting ? 'Starting sign-in…' : `Sign in to ${label}`}
+        </span>
       </Button>
       {signIn.error !== null && (
         <ErrorText className="min-w-0 truncate text-xs" title={signIn.error}>

@@ -323,6 +323,24 @@ describe('SettingsAttentionCards', () => {
     ).not.toBeNull();
   });
 
+  it('keeps a long place name inside its sign-in button', async () => {
+    const place = 'A storage place whose name runs far past the card'.repeat(2);
+    shares = [share('s1', 'long', place)];
+    await draw();
+
+    const signIn = button(
+      cards('share-sign-in')[0] as HTMLElement,
+      `Sign in to ${place}`,
+    );
+    expect(signIn?.classList.contains('max-w-full')).toBe(true);
+    expect(signIn?.getAttribute('title')).toBe(`Sign in to ${place}`);
+    expect(
+      signIn
+        ?.querySelector('[data-slot="sign-in-action-label"]')
+        ?.classList.contains('truncate'),
+    ).toBe(true);
+  });
+
   it("reads no shares on a paired device, whose share routes are the Mac's", async () => {
     shares = [share('s1', 'gcs', 'Google Cloud')];
     await draw({ remote: true });
@@ -370,7 +388,7 @@ describe('SettingsAttentionCards', () => {
     const heading = card?.querySelector(
       '[data-slot="settings-attention-member"]',
     );
-    expect(label?.classList.contains('shrink-[100]')).toBe(true);
+    expect(label?.classList.contains('shrink-[9999]')).toBe(true);
     expect(label?.classList.contains('truncate')).toBe(true);
     expect(label?.getAttribute('title')).toBe('Waiting for your decision');
     expect(heading?.classList.contains('shrink-0')).toBe(false);

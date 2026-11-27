@@ -207,7 +207,7 @@ export function EventLine({
         title={labelGivesWay ? label : undefined}
         className={cn(
           'font-medium',
-          labelGivesWay ? 'min-w-0 shrink-[100] truncate' : 'shrink-0',
+          labelGivesWay ? 'min-w-0 shrink-[9999] truncate' : 'shrink-0',
         )}>
         {label}
       </span>

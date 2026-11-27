@@ -25,7 +25,9 @@ import { AgentKind } from '../../runs/runs.types';
 import {
   LOGIN_OUTPUT_TAIL_CHARS,
   LOGIN_TIMEOUT_MS,
+  type LoginSession,
   SETTLED_LOGIN_RETENTION_MS,
+  URL_WAIT_MS,
 } from '../auth.types';
 import { CliAuthService } from './cli-auth.service';
 
@@ -352,6 +354,68 @@ describe('CliAuthService — sign-in', () => {
     expect(session.url).toBe(
       'https://auth.openai.com/oauth/authorize?state=abc',
     );
+  });
+
+  it('answers at once when the CLI asks for a code before printing a link', async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, fake } = build();
+      let answered: LoginSession | null = null;
+      void service.startLogin({ agent: AgentKind.Claude }).then((session) => {
+        answered = session;
+      });
+      fake.stdout.emit('data', 'Paste code here > ');
+
+      await vi.advanceTimersByTimeAsync(URL_WAIT_MS / 4);
+
+      expect(answered).toMatchObject({ status: 'needs_code', url: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for a link while the CLI has asked for nothing, then answers without one', async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, fake } = build();
+      let answered: LoginSession | null = null;
+      void service.startLogin({ agent: AgentKind.Claude }).then((session) => {
+        answered = session;
+      });
+      fake.stdout.emit('data', 'Opening browser…\n');
+
+      await vi.advanceTimersByTimeAsync(URL_WAIT_MS / 4);
+      expect(answered).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(URL_WAIT_MS);
+      expect(answered).toMatchObject({ status: 'waiting', url: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('answers a server sign-in at once when its CLI exits before printing a link', async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, exit } = build({ recheckStatuses: ['needs_auth'] });
+      let answered: LoginSession | null = null;
+      void service
+        .startMcpLogin({
+          agent: AgentKind.Claude,
+          server: 'linear',
+          cwd: process.cwd(),
+        })
+        .then((session) => {
+          answered = session;
+        });
+      exit('done');
+
+      await vi.advanceTimersByTimeAsync(URL_WAIT_MS / 4);
+
+      expect(answered).toMatchObject({ status: 'verifying', url: null });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('holds needs_code across later output, so a filled field cannot vanish', async () => {

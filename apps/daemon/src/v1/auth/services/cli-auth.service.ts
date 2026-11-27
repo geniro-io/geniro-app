@@ -20,6 +20,7 @@ import {
   LOGIN_OUTPUT_TAIL_CHARS,
   LOGIN_TIMEOUT_MS,
   SETTLED_LOGIN_RETENTION_MS,
+  URL_WAIT_MS,
 } from '../auth.types';
 import {
   firstUrlIn,
@@ -27,8 +28,6 @@ import {
   plainTerminalText,
 } from '../utils/login-output';
 
-/** How long `start` waits for the CLI to print its URL before answering anyway. */
-const URL_WAIT_MS = 4_000;
 /** Poll interval while waiting for the URL — short, since this blocks a request. */
 const URL_POLL_MS = 100;
 /** A sign-out clears a file and exits; it has no reason to take longer. */
@@ -639,7 +638,7 @@ export class CliAuthService {
     const deadline = Date.now() + URL_WAIT_MS;
     while (
       run.session.url === null &&
-      !isOver(run.session.status) &&
+      run.session.status === 'waiting' &&
       Date.now() < deadline
     ) {
       await new Promise((resolve) => {

@@ -105,6 +105,7 @@ import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
+import type { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import type { ReviewCommentsService } from '../../agents/services/review-comments.service';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import { SurfaceBroker } from '../../agents/services/surface.broker';
@@ -253,6 +254,16 @@ function serviceWith(index: number, value: unknown): McpServerService {
   return service(...(args as Parameters<typeof service>));
 }
 
+function serviceAskingPages(
+  questions: UserQuestionBroker,
+  questionPages: unknown,
+): McpServerService {
+  const args: unknown[] = [];
+  args[1] = questions;
+  args[35] = questionPages;
+  return service(...(args as Parameters<typeof service>));
+}
+
 function service(
   callBroker = broker(),
   questions = new UserQuestionBroker(),
@@ -304,10 +315,12 @@ function service(
   milestones = milestoneBroker(),
   surfaces = new SurfaceBroker(),
   pluginCards = new PluginProposalBroker(),
+  questionPages?: QuestionAttachmentsService,
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
       threadDelivery: {} as ThreadDeliveryService,
+      questionPages: questionPages,
       commandCenters,
       commandCenterOps: new CommandCenterOpsBroker(),
       calls: callBroker,
@@ -1853,6 +1866,74 @@ describe('McpServerService', () => {
     // A question the user ANSWERED is not a tool failure, and neither are the
     // other two outcomes — see the dispatch's own note.
     expect(result.isError).toBe(false);
+  });
+
+  it('tools/call ask_user_question refuses an artifacts id the thread never published, naming it, and asks nobody', async () => {
+    const questions = new UserQuestionBroker();
+    const asked: unknown[] = [];
+    questions.register('run-1', 'agent', async (qs, title) => {
+      asked.push([qs, title]);
+      return { status: 'answered', answer: 'Postgres' };
+    });
+    const pages = {
+      unknownPages: async (_runId: string, ids: readonly string[]) => ({
+        unknown: ids.filter((id) => id !== 'plan-page'),
+        published: ['plan-page'],
+      }),
+    };
+    const { json } = await post(
+      serviceAskingPages(questions, pages),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_QUESTION_TOOL,
+        arguments: {
+          questions: [
+            { question: 'Which database?', options: [{ label: 'Postgres' }] },
+          ],
+          artifacts: ['plan-page', 'ghost-page'],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { type: string; text: string }[];
+      isError: boolean;
+    };
+    expect(asked).toEqual([]);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('ghost-page');
+    expect(result.content[0]!.text).toContain('plan-page');
+  });
+
+  it('tools/call ask_user_question hands a published page id to the broker as its artifacts', async () => {
+    const questions = new UserQuestionBroker();
+    const asked: unknown[] = [];
+    questions.register(
+      'run-1',
+      'agent',
+      async (_qs, _title, _signal, artifacts) => {
+        asked.push(artifacts);
+        return { status: 'answered', answer: 'Postgres' };
+      },
+    );
+    const pages = {
+      unknownPages: async () => ({ unknown: [], published: ['plan-page'] }),
+    };
+    await post(
+      serviceAskingPages(questions, pages),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_QUESTION_TOOL,
+        arguments: {
+          questions: [
+            { question: 'Which database?', options: [{ label: 'Postgres' }] },
+          ],
+          artifacts: ['plan-page'],
+        },
+      }),
+    );
+    expect(asked).toEqual([['plan-page']]);
   });
 
   it('tools/call ask_user_question refuses an over-long question instead of cutting it', async () => {

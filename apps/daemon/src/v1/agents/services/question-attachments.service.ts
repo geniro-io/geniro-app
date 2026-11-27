@@ -79,11 +79,11 @@ export class QuestionAttachmentsService {
         })),
         turn: turnRows.flatMap(
           (row): ({ gallerySeq: number } | { artifactId: string })[] => {
-          if (row.kind === 'show_gallery') {
-            return [{ gallerySeq: row.seq }];
-          }
-          const artifactId = payloadOf(row.payload).artifactId;
-          return typeof artifactId === 'string' ? [{ artifactId }] : [];
+            if (row.kind === 'show_gallery') {
+              return [{ gallerySeq: row.seq }];
+            }
+            const artifactId = payloadOf(row.payload).artifactId;
+            return typeof artifactId === 'string' ? [{ artifactId }] : [];
           },
         ),
       });
@@ -115,9 +115,9 @@ export class QuestionAttachmentsService {
     em: EntityManager,
   ): Promise<number> {
     if (callId !== undefined) {
-      const started = (
-        await this.itemDao.callRowsOf(runId, [callId], em)
-      ).find((row) => row.kind === 'call_started');
+      const started = (await this.itemDao.callRowsOf(runId, [callId], em)).find(
+        (row) => row.kind === 'call_started',
+      );
       if (started !== undefined) {
         return started.seq;
       }

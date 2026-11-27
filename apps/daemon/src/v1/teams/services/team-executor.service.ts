@@ -125,6 +125,7 @@ import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import { PromptCacheKeepAliveService } from '../../agents/services/prompt-cache-keep-alive.service';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
+import { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunKindRowsCache } from '../../agents/services/run-kind-rows.cache';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
@@ -136,7 +137,6 @@ import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
 import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { TurnFolderService } from '../../agents/services/turn-folder.service';
-import { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { WriteFailureNotices } from '../../agents/services/write-failure.notices';
@@ -1095,7 +1095,8 @@ export class TeamExecutorService
     @Optional() private readonly pluginCards?: PluginProposalBroker,
     @Optional() private readonly contextRecorder?: FreshSessionContextRecorder,
     /** The pages a question card is about, optional on `artifacts`' terms. */
-    @Optional() private readonly questionAttachments?: QuestionAttachmentsService,
+    @Optional()
+    private readonly questionAttachments?: QuestionAttachmentsService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }

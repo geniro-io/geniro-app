@@ -90,7 +90,14 @@ export class AskUserQuestionTool extends BaseMcpTool {
       }
     }
     const outcome = await context.whileCancellable((signal) =>
-      this.questions.ask(runId, caller, questions, title, signal, artifacts.ids),
+      this.questions.ask(
+        runId,
+        caller,
+        questions,
+        title,
+        signal,
+        artifacts.ids,
+      ),
     );
     // None of the three outcomes is a tool FAILURE: a dismissal and an
     // unavailable channel are both answers the agent carries on from,

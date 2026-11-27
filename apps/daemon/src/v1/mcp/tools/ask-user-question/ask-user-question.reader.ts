@@ -18,7 +18,8 @@ export function readQuestionArtifacts(
   if (!Array.isArray(value)) {
     return {
       ok: false,
-      error: "'artifacts' must be an array of page ids you published with show_artifact.",
+      error:
+        "'artifacts' must be an array of page ids you published with show_artifact.",
     };
   }
   const ids: string[] = [];
@@ -26,7 +27,8 @@ export function readQuestionArtifacts(
     if (typeof entry !== 'string' || entry.trim().length === 0) {
       return {
         ok: false,
-        error: "each entry of 'artifacts' must be a page id: a non-empty string.",
+        error:
+          "each entry of 'artifacts' must be a page id: a non-empty string.",
       };
     }
     if (entry.trim().length > MAX_QUESTION_ARTIFACT_ID_LENGTH) {

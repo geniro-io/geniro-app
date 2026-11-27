@@ -16,7 +16,9 @@ const gallery = (seq: number, title: string | null, images = 2) => ({
   seq,
   payload: {
     ...(title === null ? {} : { title }),
-    images: Array.from({ length: images }, (_, i) => ({ path: `/tmp/${i}.png` })),
+    images: Array.from({ length: images }, (_, i) => ({
+      path: `/tmp/${i}.png`,
+    })),
   },
 });
 
@@ -29,10 +31,9 @@ describe('questionAttachmentsOf', () => {
       explicit: ['b-page', 'a-page'],
       pages: [page('a-page', 'Alpha sheet'), page('b-page', 'Beta sheet')],
     });
-    expect(fields.attachments.map((a) => a.kind === 'artifact' && a.artifactId)).toEqual([
-      'b-page',
-      'a-page',
-    ]);
+    expect(
+      fields.attachments.map((a) => a.kind === 'artifact' && a.artifactId),
+    ).toEqual(['b-page', 'a-page']);
   });
 
   it('attaches a page named by its exact title from an earlier turn', () => {
@@ -66,12 +67,18 @@ describe('questionAttachmentsOf', () => {
   it('matches a page id only as a whole token', () => {
     const pages = [page('report-v2', 'Quarterly numbers')];
     expect(
-      questionAttachmentsOf({ ...none, text: 'see report-v2, then pick', pages })
-        .attachments,
+      questionAttachmentsOf({
+        ...none,
+        text: 'see report-v2, then pick',
+        pages,
+      }).attachments,
     ).toHaveLength(1);
     expect(
-      questionAttachmentsOf({ ...none, text: 'see report-v23 then pick', pages })
-        .attachments,
+      questionAttachmentsOf({
+        ...none,
+        text: 'see report-v23 then pick',
+        pages,
+      }).attachments,
     ).toEqual([]);
   });
 
@@ -103,7 +110,12 @@ describe('questionAttachmentsOf', () => {
       turn: [{ artifactId: 'alpha' }, { artifactId: 'alpha' }],
     });
     expect(fields.attachments).toEqual([
-      { kind: 'artifact', artifactId: 'alpha', title: 'Alpha sheet', version: 4 },
+      {
+        kind: 'artifact',
+        artifactId: 'alpha',
+        title: 'Alpha sheet',
+        version: 4,
+      },
     ]);
   });
 

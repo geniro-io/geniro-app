@@ -35,6 +35,7 @@ import { ItemCallIndexService } from '../../agents/services/item-call-index.serv
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { PluginProposalBroker } from '../../agents/services/plugin-proposal.broker';
 import { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
+import { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import {
   hostPluginResultText,
   pluginCardInput,
@@ -72,7 +73,6 @@ import {
   teamProjectCardTool,
 } from '../../agents/utils/team-project-card';
 import type { ItemKind } from '../../runs/runs.types';
-import { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import { StageWakeService } from './stage-wake.service';
 import { TeamExecutorService } from './team-executor.service';
 
@@ -121,7 +121,8 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     private readonly stageWakes: StageWakeService,
     private readonly changes: ProjectInstructionsChangeService,
     @Optional() private readonly pluginCards?: PluginProposalBroker,
-    @Optional() private readonly questionAttachments?: QuestionAttachmentsService,
+    @Optional()
+    private readonly questionAttachments?: QuestionAttachmentsService,
   ) {}
 
   onModuleInit(): void {

@@ -1,5 +1,3 @@
-import { MAX_QUESTION_ATTACHMENTS } from '../../../agents/utils/question-attachments';
-import { MAX_QUESTION_ARTIFACT_ID_LENGTH } from './ask-user-question.reader';
 import {
   MAX_HOST_QUESTION_OPTIONS,
   MAX_HOST_QUESTIONS,
@@ -10,6 +8,8 @@ import {
   MAX_HOST_QUESTION_TEXT_LENGTH,
   MAX_HOST_QUESTION_TITLE_LENGTH,
 } from '../../../agents/utils/host-question';
+import { MAX_QUESTION_ATTACHMENTS } from '../../../agents/utils/question-attachments';
+import { MAX_QUESTION_ARTIFACT_ID_LENGTH } from './ask-user-question.reader';
 
 /** `ask_user_question`'s arguments. */
 export function askUserQuestionSchema(): Record<string, unknown> {

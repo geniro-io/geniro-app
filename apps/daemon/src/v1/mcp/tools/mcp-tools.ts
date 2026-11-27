@@ -5,7 +5,6 @@ import type { AttachmentStoreService } from '../../agents/services/attachment-st
 import type { BrowserBroker } from '../../agents/services/browser.broker';
 import type { ChartBroker } from '../../agents/services/chart.broker';
 import type { ChatArtifactsService } from '../../agents/services/chat-artifacts.service';
-import type { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import type { CommandCenterBroker } from '../../agents/services/command-center.broker';
 import type { CommandCenterOpsBroker } from '../../agents/services/command-center-ops.broker';
 import type { ComparisonBroker } from '../../agents/services/comparison.broker';
@@ -25,6 +24,7 @@ import type { PluginProposalBroker } from '../../agents/services/plugin-proposal
 import type { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import type { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
+import type { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import type { ReviewCommentsService } from '../../agents/services/review-comments.service';
 import type { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import type { SurfaceBroker } from '../../agents/services/surface.broker';

@@ -319,6 +319,7 @@ import { ProjectChatBroker } from './project-chat.broker';
 import { ProjectInstructionsBroker } from './project-instructions.broker';
 import { ProjectInstructionsChangeService } from './project-instructions-change.service';
 import { PullRequestCaptureService } from './pull-request-capture.service';
+import { QuestionAttachmentsService } from './question-attachments.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunHoldRegistry } from './run-hold.registry';
@@ -330,7 +331,6 @@ import { SurfaceBroker, type SurfaceDrawer } from './surface.broker';
 import { SurfaceService } from './surface.service';
 import { TeamBuilderBroker } from './team-builder.broker';
 import { TeamProposalBroker } from './team-proposal.broker';
-import { QuestionAttachmentsService } from './question-attachments.service';
 import { ThreadInboxService } from './thread-inbox.service';
 import { TurnFolderService } from './turn-folder.service';
 import { UserQuestionBroker } from './user-question.broker';
@@ -976,7 +976,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     /** `save_plugin`'s sink and the writer behind its Approve. Optional for the positional specs. */
     @Optional() private readonly pluginCards?: PluginProposalBroker,
     /** The pages a question card is about. Optional for the positional specs. */
-    @Optional() private readonly questionAttachments?: QuestionAttachmentsService,
+    @Optional()
+    private readonly questionAttachments?: QuestionAttachmentsService,
   ) {}
 
   /**

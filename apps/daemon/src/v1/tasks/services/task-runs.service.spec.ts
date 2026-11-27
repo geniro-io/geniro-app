@@ -2237,6 +2237,96 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
   });
 
+  describe('a card whose run finished', () => {
+    const finishRun = async (runId: string): Promise<void> => {
+      const run = await runDao.getById(runId);
+      (run as Run).status = 'completed';
+      await em.flush();
+    };
+    const setIntake = async (status: 'todo' | 'in_progress'): Promise<void> => {
+      const project = await projectDao.getById(projectId);
+      (project as Project).autopilotIntakeStatus = status;
+      await em.flush();
+    };
+
+    it('refuses an AUTOPILOT start of a card in an in_progress intake, and sends nothing into its thread', async () => {
+      await setIntake('in_progress');
+      const task = await seed();
+      await service.start(task.id, start({ from: 'todo' }));
+      await finishRun('run-1');
+      createChat.mockClear();
+      sendMessage.mockClear();
+
+      await expect(
+        service.start(task.id, {
+          ...start({ from: 'in_progress' }),
+          startedBy: 'autopilot',
+        }),
+      ).rejects.toMatchObject({ errorCode: 'TASK_FINISHED' });
+
+      expect(createChat).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect((await tasks.get(task.id)).status).toBe('in_progress');
+    });
+
+    it('refuses an AUTOPILOT start of a finished TEAM run from an in_progress intake', async () => {
+      teamApprovals = { 'dev-team': 'auto' };
+      snapshotApprovals = { 'dev-team': 'auto' };
+      await setIntake('in_progress');
+      const task = await seed();
+      const row = await taskDao.getById(task.id);
+      (row as Task).teamSlug = 'dev-team';
+      await em.flush();
+      await service.start(task.id, start({ from: 'todo' }));
+      await finishRun('wf-run-1');
+      startTeamRun.mockClear();
+      sendTeamMessage.mockClear();
+
+      await expect(
+        service.start(task.id, {
+          ...start({ from: 'in_progress' }),
+          startedBy: 'autopilot',
+        }),
+      ).rejects.toMatchObject({ errorCode: 'TASK_FINISHED' });
+
+      expect(startTeamRun).not.toHaveBeenCalled();
+      expect(sendTeamMessage).not.toHaveBeenCalled();
+    });
+
+    it('still continues the same thread when a Run press starts it from an in_progress intake', async () => {
+      await setIntake('in_progress');
+      const task = await seed();
+      await service.start(task.id, start({ from: 'todo' }));
+      await finishRun('run-1');
+      createChat.mockClear();
+      sendMessage.mockClear();
+
+      await expect(
+        service.start(task.id, start({ from: 'in_progress' })),
+      ).resolves.toMatchObject({ status: 'in_progress', runId: 'run-1' });
+
+      expect(createChat).not.toHaveBeenCalled();
+      expect(sendMessage).toHaveBeenCalledWith('run-1', 'ship it');
+    });
+
+    it('lets the AUTOPILOT continue a finished card that is back in todo, as it always did', async () => {
+      await setIntake('todo');
+      const task = await seed();
+      await service.start(task.id, start());
+      await finishRun('run-1');
+      await tasks.moveStatus(task.id, { from: 'in_progress', to: 'todo' });
+      createChat.mockClear();
+      sendMessage.mockClear();
+
+      await expect(
+        service.start(task.id, { ...start(), startedBy: 'autopilot' }),
+      ).resolves.toMatchObject({ status: 'in_progress', runId: 'run-1' });
+
+      expect(createChat).not.toHaveBeenCalled();
+      expect(sendMessage).toHaveBeenCalledWith('run-1', 'ship it');
+    });
+  });
+
   describe('a card the command center asked to start', () => {
     it('settles the request when its run starts, and announces the card once with it gone', async () => {
       const task = await seed();

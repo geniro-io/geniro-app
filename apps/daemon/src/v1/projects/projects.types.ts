@@ -490,6 +490,12 @@ export interface ProjectQueueRaw {
    */
   stoppedTaskIds: string[];
   /**
+   * The cards whose run COMPLETED. The settle leaves such a card where it is —
+   * the agent moves it with its report — so it can sit in an intake column the
+   * autopilot starts from; the queue skips it unless that column is a waiting one.
+   */
+  finishedTaskIds: string[];
+  /**
    * Of those, the ones an INTERRUPTION stopped rather than the user, with its
    * cause (`Task.interruptedBy`) — the board says why such a card waits.
    */

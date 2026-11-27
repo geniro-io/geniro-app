@@ -41,7 +41,11 @@ export class ProjectQueueService {
     const project = await this.require(projectId, em);
     const tasks = await this.taskDao.listForProject(projectId, em);
 
-    const { active, stopped: cancelled } = await this.readRuns(tasks, em);
+    const {
+      active,
+      stopped: cancelled,
+      finished,
+    } = await this.readRuns(tasks, em);
     // The CARD's own record first — it outlives the user carrying the thread
     // on, which moves the run past `cancelled` (see `Task.stoppedAt`). The
     // run's status still counts while it holds: it is the same fact, read off
@@ -86,6 +90,7 @@ export class ProjectQueueService {
       teamSlug: project.teamSlug,
       waitingTasks,
       stoppedTaskIds: stopped,
+      finishedTaskIds: finished,
       interruptedTasks: new Map(
         tasks.flatMap((task) =>
           task.stoppedAt !== null && task.interruptedBy !== null
@@ -126,18 +131,21 @@ export class ProjectQueueService {
    * it is closed `failed` with an `interrupted` row at the next boot, and its
    * card goes back to the intake column to be picked up again, so quitting the
    * app mid-run never lands a card here.
+   *
+   * A run that COMPLETED is named as `finished`: its card stays where the agent
+   * left it, so it can sit in an intake column the autopilot starts from.
    */
   private async readRuns(
     tasks: readonly { id: string; runId: string | null }[],
     em: EntityManager,
-  ): Promise<{ active: ActiveTask[]; stopped: string[] }> {
+  ): Promise<{ active: ActiveTask[]; stopped: string[]; finished: string[] }> {
     const byRunId = new Map(
       tasks
         .filter((task) => task.runId !== null)
         .map((task) => [task.runId as string, task.id]),
     );
     if (byRunId.size === 0) {
-      return { active: [], stopped: [] };
+      return { active: [], stopped: [], finished: [] };
     }
     const runs = await this.runDao.getAll(
       { id: { $in: [...byRunId.keys()] } },
@@ -146,6 +154,7 @@ export class ProjectQueueService {
     );
     const active: ActiveTask[] = [];
     const stopped: string[] = [];
+    const finished: string[] = [];
     for (const run of runs) {
       const taskId = byRunId.get(run.id);
       if (taskId === undefined) {
@@ -154,6 +163,9 @@ export class ProjectQueueService {
       if (run.status === 'cancelled') {
         stopped.push(taskId);
       }
+      if (run.status === 'completed') {
+        finished.push(taskId);
+      }
       if (isTerminalRunStatus(run.status)) {
         continue;
       }
@@ -161,7 +173,7 @@ export class ProjectQueueService {
       // at another agent since, and what is on screen is what is working.
       active.push({ id: taskId, runId: run.id, agentKind: run.agentKind });
     }
-    return { active, stopped };
+    return { active, stopped, finished };
   }
 
   private async require(

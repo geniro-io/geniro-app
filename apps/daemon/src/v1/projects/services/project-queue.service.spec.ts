@@ -244,6 +244,22 @@ describe('ProjectQueueService (in-memory sqlite)', () => {
     expect(queue.waiting).toBe(2);
   });
 
+  it('names as finished only a card whose run completed, not one cancelled, failed or still running', async () => {
+    const finished = await addTask(
+      'finished',
+      'in_progress',
+      0,
+      (await addRun('completed')).id,
+    );
+    await addTask('cancelled', 'todo', 1, (await addRun('cancelled')).id);
+    await addTask('failed', 'todo', 2, (await addRun('failed')).id);
+    await addTask('running', 'in_progress', 3, (await addRun('running')).id);
+
+    const queue = await service.readRaw(projectId);
+
+    expect(queue.finishedTaskIds).toEqual([finished.id]);
+  });
+
   it('names as stopped a card the settle MARKED, after its run has moved past `cancelled`', async () => {
     // The user typed into the stopped thread; its run now reads `completed`.
     // The card's own mark is what still says they stopped it — once, however

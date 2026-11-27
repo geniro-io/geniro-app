@@ -29,8 +29,8 @@ export interface ActiveThreads {
   runs: RunWire[];
 }
 
-function activityOf(run: RunWire): string | null {
-  const line = run.lastMessage?.replace(/\s+/g, ' ').trim() ?? '';
+function activityOf(text: string | null): string | null {
+  const line = text?.replace(/\s+/g, ' ').trim() ?? '';
   if (line === '') {
     return null;
   }
@@ -181,20 +181,21 @@ export class CommandCenterService {
       const lastMail = lastContact.get(run.id) ?? null;
       const task = taskOf.get(run.id) ?? null;
       const column = columnOf(run);
+      const report =
+        column === 'done'
+          ? threadReportOf(
+              run.outcome?.summary,
+              agentMessages.get(run.id) ?? null,
+            )
+          : null;
       return {
         run,
         task: taskRefOf(run, task),
         handle: entry?.handle ?? null,
         note: entry?.note ?? null,
         column,
-        activity: activityOf(run),
-        report:
-          column === 'done'
-            ? threadReportOf(
-                run.outcome?.summary,
-                agentMessages.get(run.id) ?? null,
-              )
-            : null,
+        activity: activityOf(column === 'done' ? report : run.lastMessage),
+        report,
         contact: {
           lastAt: lastMail === null ? null : new Date(lastMail).toISOString(),
           awaitingReply: awaiting.has(run.id),

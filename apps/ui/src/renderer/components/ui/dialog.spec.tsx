@@ -706,6 +706,59 @@ describe('Dialog — full screen', () => {
     expect(closeOuter).not.toHaveBeenCalled();
   });
 
+  it('gives a viewer card the same 44px ✕, safe area, Back and one pop as a full-screen dialog', async () => {
+    const onClose = vi.fn();
+    function Picture(): React.JSX.Element {
+      const [open, setOpen] = React.useState(true);
+      return (
+        <Dialog
+          open={open}
+          viewer
+          title="Screenshot"
+          onClose={() => {
+            onClose();
+            setOpen(false);
+          }}>
+          image
+        </Dialog>
+      );
+    }
+    const push = vi.spyOn(history, 'pushState');
+    await act(async () => {
+      root.render(<Picture />);
+    });
+
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(closeButton().className).toContain('size-[44px]');
+    expect(overlay()!.className).toContain('env(safe-area-inset-top)');
+    expect(overlay()!.className).toContain('h-dvh');
+    expect(overlay()!.querySelector('[tabindex="-1"]')!.className).toContain(
+      'rounded-xl',
+    );
+
+    const back = vi.spyOn(history, 'back');
+    await afterPopstate(() => closeButton().click(), 'the ✕');
+
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(overlay()).toBeNull();
+  });
+
+  it('closes a viewer card on the platform’s Back', async () => {
+    const onClose = vi.fn();
+    await act(async () => {
+      root.render(
+        <Dialog open viewer onClose={onClose} title="Screenshot">
+          image
+        </Dialog>,
+      );
+    });
+
+    await afterPopstate(() => history.back(), 'the platform back');
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('closes a card dialog on the ✕ at once, with no trip through history', async () => {
     const onClose = vi.fn();
     await renderViewer({ onClose, fullScreen: false });

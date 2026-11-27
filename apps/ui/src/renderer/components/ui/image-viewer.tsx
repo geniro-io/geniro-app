@@ -444,6 +444,7 @@ export function ImageViewer({
     <Dialog
       open
       onClose={onClose}
+      viewer
       title={
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="block truncate" title={title}>

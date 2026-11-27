@@ -332,6 +332,7 @@ export function RunWaterfallDialog({
       open={open}
       onClose={onClose}
       title="Where the run went"
+      viewer
       initialFocus={startRef}
       className="h-[92vh] w-[min(96vw,84rem)] max-w-none">
       <div className="flex flex-col gap-5">

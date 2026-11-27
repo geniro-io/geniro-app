@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => {
   const engineClose = vi.fn();
   const socket = {
     connected: false,
+    active: false,
     io: { engine: { close: engineClose } },
     on: (event: string, h: (...args: unknown[]) => void) => {
       handlers[event] = h;
@@ -93,6 +94,7 @@ beforeEach(() => {
   mocks.engineClose.mockClear();
   mocks.io.mockClear();
   mocks.socket.connected = false;
+  mocks.socket.active = false;
   mocks.ref.any = null;
   for (const key of Object.keys(mocks.handlers)) {
     delete mocks.handlers[key];
@@ -385,6 +387,22 @@ describe('DaemonClient', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('reports active only while its socket is, and never after close', () => {
+    const client = new DaemonClient(handle, {});
+    expect(client.isActive()).toBe(false);
+
+    mocks.socket.active = true;
+    client.connect();
+    expect(client.isActive()).toBe(true);
+
+    mocks.socket.active = false;
+    expect(client.isActive()).toBe(false);
+
+    mocks.socket.active = true;
+    client.close();
+    expect(client.isActive()).toBe(false);
   });
 
   it('leaveRun clears the active room so a later reconnect does not rejoin it', async () => {

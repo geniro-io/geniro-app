@@ -2323,6 +2323,11 @@ export class DaemonClient {
       .catch(() => undefined);
   }
 
+  /** Connected or reconnecting on its own; false once closed or ended by the daemon. */
+  isActive(): boolean {
+    return this.socket?.active === true;
+  }
+
   close(): void {
     this.rejectAllJoins('socket closed before joining run');
     this.socket?.close();

@@ -418,9 +418,11 @@ export function App(): React.JSX.Element {
     // The launch's start answers twice — the `onDaemonRestarted` push and the
     // mount's own `ensureDaemon`, which joins that same start — and a second
     // attach of one handle would only drop a socket that is already opening.
+    // A closed or daemon-ended client is replaced even for the same handle.
     const held = handleRef.current;
     if (
       held !== null &&
+      clientRef.current?.isActive() === true &&
       held.host === daemonHandle.host &&
       held.port === daemonHandle.port &&
       held.token === daemonHandle.token

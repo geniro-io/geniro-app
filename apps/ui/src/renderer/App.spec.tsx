@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
   afterEach,
@@ -80,10 +80,18 @@ vi.mock('./chats/Chats', async () => {
     },
   };
 });
+const daemonClients = vi.hoisted(() => ({ live: new Set<object>() }));
 vi.mock('./daemon-client', () => ({
   DaemonClient: class {
-    connect(): void {}
-    close(): void {}
+    connect(): void {
+      daemonClients.live.add(this);
+    }
+    close(): void {
+      daemonClients.live.delete(this);
+    }
+    isActive(): boolean {
+      return daemonClients.live.has(this);
+    }
     // The Stats page subscribes on mount, and the tab-bar test opens it.
     onUsageRecorded(): () => void {
       return () => {};
@@ -338,6 +346,67 @@ describe('App — while the daemon starts', () => {
     await flush();
 
     expect(connects).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('App — its daemon effect run again', () => {
+  it('opens a new socket when the effect runs again after closing the held one for the same handle', async () => {
+    daemonClients.live.clear();
+    window.geniro = createPreloadStub({
+      ensureDaemon: () => Promise.resolve(HANDLE),
+      onDaemonRestarted: (listener) => {
+        listener({ ...HANDLE });
+        return () => undefined;
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('no daemon in this spec'))),
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <App />
+        </StrictMode>,
+      );
+    });
+    await flush();
+
+    expect(daemonClients.live.size).toBe(1);
+  });
+
+  it('opens a new socket on Retry when the daemon ended the held one and the handle is unchanged', async () => {
+    daemonClients.live.clear();
+    window.geniro = createPreloadStub({
+      ensureDaemon: () => Promise.resolve(HANDLE),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('no daemon in this spec'))),
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    await flush();
+    const [ended] = [...daemonClients.live];
+    expect(ended).toBeDefined();
+    daemonClients.live.delete(ended!);
+
+    await act(async () => {
+      buttonNamed('Retry')!.click();
+    });
+    await flush();
+
+    expect(daemonClients.live.size).toBe(1);
+    expect(daemonClients.live.has(ended!)).toBe(false);
   });
 });
 

@@ -66,25 +66,32 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function namesTitle(text: string, title: string | null): boolean {
+function titleMention(text: string, title: string | null): number | null {
   if (title === null) {
-    return false;
+    return null;
   }
   const wanted = collapse(title);
-  return (
-    wanted.length >= MIN_NAMED_TITLE_LENGTH &&
-    text.toLowerCase().includes(wanted.toLowerCase())
-  );
+  if (wanted.length < MIN_NAMED_TITLE_LENGTH) {
+    return null;
+  }
+  const at = text.toLowerCase().indexOf(wanted.toLowerCase());
+  return at < 0 ? null : at;
 }
 
-function namesId(text: string, artifactId: string): boolean {
+function idMention(text: string, artifactId: string): number | null {
   if (artifactId.length < MIN_NAMED_TITLE_LENGTH) {
-    return false;
+    return null;
   }
-  return new RegExp(
+  const match = new RegExp(
     `(^|[^\\p{L}\\p{N}_-])${escapeRegExp(artifactId)}($|[^\\p{L}\\p{N}_-])`,
     'u',
-  ).test(text);
+  ).exec(text);
+  return match === null ? null : match.index + (match[1]?.length ?? 0);
+}
+
+function earliest(...positions: (number | null)[]): number | null {
+  const found = positions.filter((at): at is number => at !== null);
+  return found.length === 0 ? null : Math.min(...found);
 }
 
 function galleryTitle(payload: Record<string, unknown>): string | null {
@@ -98,9 +105,10 @@ function galleryCount(payload: Record<string, unknown>): number {
 }
 
 /**
- * The card's attachments, explicit first, then named in its words, then the
- * asking turn's, newest turn rows first; one entry per page and per picture set,
- * at most {@link MAX_QUESTION_ATTACHMENTS}, the rest counted.
+ * The card's attachments, explicit first, then named in its words in the order
+ * the words first name them, then the asking turn's, newest turn rows first;
+ * one entry per page and per picture set, at most
+ * {@link MAX_QUESTION_ATTACHMENTS}, the rest counted.
  */
 export function questionAttachmentsOf(
   inputs: QuestionAttachmentInputs,
@@ -144,15 +152,24 @@ export function questionAttachmentsOf(
   for (const artifactId of inputs.explicit) {
     addPage(artifactId);
   }
+  const named: { at: number; add: () => void }[] = [];
   for (const page of inputs.pages) {
-    if (namesTitle(text, page.title) || namesId(text, page.artifactId)) {
-      addPage(page.artifactId);
+    const at = earliest(
+      titleMention(text, page.title),
+      idMention(text, page.artifactId),
+    );
+    if (at !== null) {
+      named.push({ at, add: () => addPage(page.artifactId) });
     }
   }
   for (const gallery of [...galleries.values()].sort((a, b) => b.seq - a.seq)) {
-    if (namesTitle(text, galleryTitle(gallery.payload))) {
-      addGallery(gallery.seq);
+    const at = titleMention(text, galleryTitle(gallery.payload));
+    if (at !== null) {
+      named.push({ at, add: () => addGallery(gallery.seq) });
     }
+  }
+  for (const entry of named.sort((a, b) => a.at - b.at)) {
+    entry.add();
   }
   for (const row of [...inputs.turn].reverse()) {
     if ('artifactId' in row) {

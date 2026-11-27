@@ -101,6 +101,34 @@ describe('questionAttachmentsOf', () => {
     ).toEqual(['gamma', 'gallery:7', 'alpha']);
   });
 
+  it('orders named pages and picture sets by where the words first name them', () => {
+    const fields = questionAttachmentsOf({
+      ...none,
+      text: 'Put Logo drafts next to Beta sheet, then alpha-page',
+      pages: [page('alpha-page', 'Alpha sheet'), page('beta', 'Beta sheet')],
+      galleries: [gallery(7, 'Logo drafts')],
+    });
+    expect(
+      fields.attachments.map((a) =>
+        a.kind === 'artifact' ? a.artifactId : `gallery:${a.seq}`,
+      ),
+    ).toEqual(['gallery:7', 'beta', 'alpha-page']);
+  });
+
+  it('places a page by its earliest mention, title or id', () => {
+    const fields = questionAttachmentsOf({
+      ...none,
+      text: 'First Beta sheet, then report-v2, and later Quarterly numbers',
+      pages: [
+        page('report-v2', 'Quarterly numbers'),
+        page('beta', 'Beta sheet'),
+      ],
+    });
+    expect(
+      fields.attachments.map((a) => a.kind === 'artifact' && a.artifactId),
+    ).toEqual(['beta', 'report-v2']);
+  });
+
   it('keeps one entry per page however often it is named and shown', () => {
     const fields = questionAttachmentsOf({
       ...none,

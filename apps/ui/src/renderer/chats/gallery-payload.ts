@@ -97,7 +97,11 @@ function readImage(value: unknown): GalleryImage | null {
  * its index and removing one re-attributes nothing.
  */
 export function readGallery(item: ChatItem): GallerySpec | null {
-  const payload: unknown = item.payload;
+  return readGallerySpec(item.payload);
+}
+
+/** The gallery a `show_gallery` payload names, or null (see {@link readGallery}). */
+export function readGallerySpec(payload: unknown): GallerySpec | null {
   if (typeof payload !== 'object' || payload === null) {
     return null;
   }

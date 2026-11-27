@@ -17,6 +17,7 @@ import {
   ArtifactAnswersContext,
   type ArtifactAnswersStore,
 } from './published-artifact';
+import type { QuestionAttachmentSet } from './question-attachments-payload';
 import { QuestionContextMessages } from './question-context-messages';
 import {
   type ThreadContextMessage,
@@ -353,6 +354,7 @@ describe('QuestionContextMessages with the pages and pictures its thread showed'
     drawWith(
       threadContextReaderOf(
         {
+          readRunArtifacts: vi.fn(),
           listRunItems: vi.fn().mockResolvedValue({
             items: [
               itemRow(2, 'show_artifact', 'assistant', {
@@ -386,6 +388,7 @@ describe('QuestionContextMessages with the pages and pictures its thread showed'
     drawWith(
       threadContextReaderOf(
         {
+          readRunArtifacts: vi.fn(),
           listRunItems: vi.fn().mockResolvedValue({
             items: [
               itemRow(2, 'show_gallery', 'assistant', {
@@ -425,6 +428,7 @@ describe('QuestionContextMessages with the pages and pictures its thread showed'
       .mockResolvedValue({ values: { choice: 'b' }, updatedAt: 'now' });
     const reader = threadContextReaderOf(
       {
+        readRunArtifacts: vi.fn(),
         listRunItems: vi.fn().mockResolvedValue({
           items: [
             itemRow(2, 'show_artifact', 'assistant', {
@@ -540,6 +544,7 @@ describe('QuestionContextMessages with the pages and pictures its thread showed'
     };
     const reader = threadContextReaderOf(
       {
+        readRunArtifacts: vi.fn(),
         listRunItems: vi.fn().mockResolvedValue({
           items: [
             itemRow(2, 'show_artifact', 'assistant', {
@@ -574,5 +579,64 @@ describe('QuestionContextMessages with the pages and pictures its thread showed'
 
     expect(container.querySelector('iframe')).not.toBeNull();
     expect(container.querySelector('button[aria-label^="Share "]')).toBeNull();
+  });
+});
+
+describe('a question row that carries its attachments', () => {
+  const PLAN = {
+    artifactId: 'plan',
+    version: 1,
+    title: 'Plan',
+    summary: null,
+    key: 'a'.repeat(64),
+  };
+  const OTHER = { ...PLAN, artifactId: 'other', title: 'Other page' };
+
+  function drawAttached(
+    read: ThreadContextReader['read'],
+    attachments: QuestionAttachmentSet | undefined,
+  ): void {
+    act(() => {
+      root.render(
+        <ThreadContextReaderContext.Provider
+          value={stubThreadContextReader(read, {
+            artifacts: () => Promise.resolve([PLAN]),
+          })}>
+          <QuestionContextMessages
+            threadRunId="thread-1"
+            threadRequestId="req-1"
+            attachments={attachments}
+          />
+        </ThreadContextReaderContext.Provider>,
+      );
+    });
+  }
+
+  it('draws exactly the attached pages, in place of the pages the asking turn showed', async () => {
+    drawAttached(vi.fn().mockResolvedValue([{ seq: 4, artifact: OTHER }]), {
+      attachments: [
+        { kind: 'artifact', artifactId: 'plan', title: 'Plan', version: 1 },
+      ],
+      moreAttachments: 0,
+    });
+    await settle();
+
+    const visuals = container.querySelectorAll('[data-slot="artifact-card"]');
+    expect(visuals).toHaveLength(1);
+    expect(visuals[0]?.textContent).toContain('Plan');
+    expect(container.textContent).not.toContain('Other page');
+  });
+
+  it('keeps the pages the asking turn showed for a question written before attachments', async () => {
+    drawAttached(
+      vi.fn().mockResolvedValue([{ seq: 4, artifact: OTHER }]),
+      undefined,
+    );
+    await settle();
+
+    expect(container.textContent).toContain('Other page');
+    expect(
+      container.querySelector('[data-slot="thread-question-context-visual"]'),
+    ).not.toBeNull();
   });
 });

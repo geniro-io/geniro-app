@@ -34,6 +34,8 @@ import { MarkdownContent } from './markdown-content';
 import { insertPastedFilePaths } from './paste-file-paths';
 import { PlanCard, PROPOSE_PLAN, readPlan } from './plan-card';
 import { pluginCardOf, PluginProposalCard } from './plugin-proposal-card';
+import { QuestionAttachments } from './question-attachments';
+import type { QuestionAttachmentSet } from './question-attachments-payload';
 import { TeamProposalCard } from './team-proposal-card';
 import { readProposalOutcome, readTeamProposal } from './team-proposal-payload';
 import { HazardWarning, useHazardGate } from './text-hazard-gate';
@@ -492,10 +494,14 @@ function QuestionCard({
   expired,
   memoryKey,
   fold,
+  attached,
+  runId,
   onRespond,
 }: {
   /** Already parsed and non-empty. */
   questions: ParsedQuestion[];
+  attached?: QuestionAttachmentSet;
+  runId: string | null;
   verdict: boolean | null;
   /** What the user answered, once the transcript recorded it. */
   answer: string | null;
@@ -821,6 +827,13 @@ function QuestionCard({
           )}
         />
       </button>
+      {attached === undefined || !runId ? null : (
+        <QuestionAttachments
+          threadRunId={runId}
+          set={attached}
+          variant="chips"
+        />
+      )}
       {collapsed ? (
         <div className="flex min-w-0 flex-col gap-0.5">
           {settled ? (
@@ -1495,6 +1508,8 @@ export function ApprovalCard({
   onOpenTeam,
   onOpenProject,
   fold,
+  attached,
+  runId,
 }: {
   toolName: string;
   input: unknown;
@@ -1513,6 +1528,13 @@ export function ApprovalCard({
    * only: a question is answered, not remembered.
    */
   options?: unknown;
+  /**
+   * The pages and pictures a question row names, drawn as chips on the question
+   * card. Given with `runId`, the run the question was asked in; absent on a
+   * relayed card, whose chips the relay draws.
+   */
+  attached?: QuestionAttachmentSet;
+  runId?: string | null;
   /**
    * The label of the option a settled verdict picked, read back from the
    * verdict item; null for a one-time answer or a card still pending.
@@ -1669,6 +1691,8 @@ export function ApprovalCard({
       expired={expired}
       memoryKey={questionMemoryKey(requestId)}
       fold={fold}
+      attached={attached}
+      runId={runId ?? null}
       onRespond={onRespond}
     />
   ) : (

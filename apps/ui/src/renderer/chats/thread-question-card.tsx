@@ -19,6 +19,11 @@ import type { DaemonClient } from '../daemon-client';
 import { EventLine, type EventTone } from './agent-event-card';
 import { settleReleasesQueue } from './follow-up-delivery';
 import { THREAD_QUESTION_CARD } from './geniro-tool';
+import { QuestionAttachments } from './question-attachments';
+import {
+  type QuestionAttachmentSet,
+  readQuestionAttachmentSet,
+} from './question-attachments-payload';
 import { QuestionContextMessages } from './question-context-messages';
 import { isSettledRunStatus } from './run-status';
 import { ThreadOpenContext, useThreadIdentity } from './thread-title';
@@ -39,6 +44,8 @@ export interface ThreadQuestionRelay {
   input: unknown;
   questions?: unknown;
   options?: unknown;
+  /** The pages and pictures the question was asked about; absent on a row written before they existed. */
+  attached?: QuestionAttachmentSet;
 }
 
 function readString(value: unknown): string | null {
@@ -72,6 +79,7 @@ export function readThreadQuestionRelay(
     return null;
   }
   const threadRequestId = readString(record.threadRequestId);
+  const attached = readQuestionAttachmentSet(record);
   return {
     threadRunId,
     threadIsTeam: record.threadIsTeam === true,
@@ -82,6 +90,7 @@ export function readThreadQuestionRelay(
     input: record.input,
     ...(record.questions === undefined ? {} : { questions: record.questions }),
     ...(record.options === undefined ? {} : { options: record.options }),
+    ...(attached === null ? {} : { attached }),
   };
 }
 
@@ -226,6 +235,13 @@ export function ThreadQuestionCard({
         data-folded={true}
         className="flex w-full min-w-0 flex-col gap-1.5">
         {children}
+        {relay.attached === undefined ? null : (
+          <QuestionAttachments
+            threadRunId={relay.threadRunId}
+            set={relay.attached}
+            variant="chips"
+          />
+        )}
         {noteLine}
       </article>
     );
@@ -266,6 +282,7 @@ export function ThreadQuestionCard({
       <QuestionContextMessages
         threadRunId={relay.threadRunId}
         threadRequestId={relay.threadRequestId ?? null}
+        attachments={relay.attached}
       />
       {state === 'closed' ? (
         <p className="text-xs text-muted-foreground">

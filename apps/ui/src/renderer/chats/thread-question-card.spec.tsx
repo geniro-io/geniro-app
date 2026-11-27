@@ -495,6 +495,62 @@ describe('a relayed question once settled', () => {
     ).toHaveLength(1);
   });
 
+  it('draws the pages a folded answered card was asked about as chips under it, and none for a relay written before attachments', async () => {
+    const reader = stubThreadContextReader(() => Promise.resolve([]), {
+      artifacts: () =>
+        Promise.resolve([
+          {
+            artifactId: 'plan',
+            version: 1,
+            title: 'Plan',
+            summary: null,
+            key: 'k',
+          },
+        ]),
+    });
+    const draw = (input: unknown) =>
+      act(() => {
+        root.render(
+          <ThreadContextReaderContext.Provider value={reader}>
+            <ThreadOpenContext.Provider value={() => undefined}>
+              <ApprovalCard
+                toolName={THREAD_QUESTION_CARD}
+                input={input}
+                requestId="relay-1"
+                verdict={true}
+                answer="Redis"
+                onRespond={vi.fn()}
+              />
+            </ThreadOpenContext.Provider>
+          </ThreadContextReaderContext.Provider>,
+        );
+      });
+    const attached = {
+      attachments: [
+        { kind: 'artifact', artifactId: 'plan', title: 'Plan', version: 1 },
+      ],
+      moreAttachments: 0,
+    };
+    draw({ ...RELAYED_QUESTION, ...attached });
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    expect(card().dataset.folded).toBe('true');
+    const chips = card().querySelectorAll(
+      '[data-slot="question-attachment-chip"]',
+    );
+    expect(chips).toHaveLength(1);
+    expect(chips[0]?.getAttribute('aria-label')).toBe('Plan');
+    expect(card().querySelector('iframe')).toBeNull();
+
+    draw(RELAYED_QUESTION);
+    expect(
+      card().querySelectorAll('[data-slot="question-attachment-chip"]'),
+    ).toHaveLength(0);
+  });
+
   it('opens the whole card with one press and folds it back with the next', () => {
     renderOpenable({ verdict: true, answer: 'Redis' });
     press();

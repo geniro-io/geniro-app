@@ -3,11 +3,13 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubThreadContextReader } from '../__fixtures__/thread-context-reader';
 import {
   ApprovalCard,
   imagesAttachedNote,
   pickedLabelsOf,
 } from './approval-card';
+import { ThreadContextReaderContext } from './thread-question-context';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 (
@@ -3155,5 +3157,89 @@ describe("ApprovalCard — the agent's remembering options", () => {
       />,
     );
     expect(buttonNamed(el, 'Allow for this session')).toBeUndefined();
+  });
+});
+
+describe("a question the thread asked, on the thread's own card", () => {
+  const QUESTIONS = [
+    {
+      question: 'Which cache should I clear?',
+      header: 'Cache',
+      options: [{ label: 'Redis', description: 'the shared one' }],
+      multiSelect: false,
+    },
+  ];
+  const PLAN = {
+    artifactId: 'plan',
+    version: 1,
+    title: 'Plan',
+    summary: null,
+    key: 'k',
+  };
+
+  async function flush(): Promise<void> {
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+  }
+
+  it('draws its pages as chips, and no page content, while the question is open', async () => {
+    const reader = stubThreadContextReader(() => Promise.resolve([]), {
+      artifacts: () => Promise.resolve([PLAN]),
+    });
+    const el = render(
+      <ThreadContextReaderContext.Provider value={reader}>
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={{ questions: QUESTIONS }}
+          questions={QUESTIONS}
+          verdict={null}
+          onRespond={vi.fn()}
+          runId="thread-1"
+          attached={{
+            attachments: [
+              {
+                kind: 'artifact',
+                artifactId: 'plan',
+                title: 'Plan',
+                version: 1,
+              },
+            ],
+            moreAttachments: 0,
+          }}
+        />
+      </ThreadContextReaderContext.Provider>,
+    );
+    await flush();
+
+    expect(
+      el.querySelectorAll('[data-slot="question-attachment-chip"]'),
+    ).toHaveLength(1);
+    expect(el.querySelector('iframe')).toBeNull();
+  });
+
+  it('draws no chip for a question written before attachments existed', async () => {
+    const reader = stubThreadContextReader(() => Promise.resolve([]), {
+      artifacts: () => Promise.resolve([PLAN]),
+    });
+    const el = render(
+      <ThreadContextReaderContext.Provider value={reader}>
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={{ questions: QUESTIONS }}
+          questions={QUESTIONS}
+          verdict={null}
+          onRespond={vi.fn()}
+          runId="thread-1"
+        />
+      </ThreadContextReaderContext.Provider>,
+    );
+    await flush();
+
+    expect(
+      el.querySelectorAll('[data-slot="question-attachment-chip"]'),
+    ).toHaveLength(0);
   });
 });

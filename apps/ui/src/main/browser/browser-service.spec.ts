@@ -256,20 +256,52 @@ describe('BrowserService', () => {
     expect(second.setBounds).toHaveBeenLastCalledWith(DOCKED);
   });
 
-  it('keeps a size on a background tab that was never shown, after another tab takes the pane', async () => {
+  it('resizes a background tab with the pane from its first measure on, so its page matches the area the user would see it in', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://a.test/', { openedBy: 'Dev' });
+    await service.openTab('run-1', 'https://b.test/', { openedBy: 'Dev' });
+    const background = h.views[0] as FakeView;
+
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    expect(background.setBounds).toHaveBeenLastCalledWith(DOCKED);
+
+    const narrower = { ...DOCKED, x: DOCKED.x + 16, width: DOCKED.width - 16 };
+    service.setBounds('run-1', narrower, asWindow(main));
+
+    expect(main.contentView.addChildView).not.toHaveBeenCalledWith(background);
+    expect(background.setBounds).toHaveBeenLastCalledWith(narrower);
+  });
+
+  it("sizes a background tab by the pop-out's pane while the chat is popped out", async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://a.test/', { openedBy: null });
+    await service.openTab('run-1', 'https://b.test/', { openedBy: null });
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    service.popOut('run-1', 'Fix the build');
+    const popout = h.windows[1] as FakeWindow;
+
+    service.setBounds('run-1', WINDOWED, asWindow(popout));
+    const narrower = { ...WINDOWED, width: WINDOWED.width - 16 };
+    service.setBounds('run-1', narrower, asWindow(popout));
+    service.setBounds('run-1', { ...DOCKED, width: 250 }, asWindow(main));
+
+    expect((h.views[0] as FakeView).setBounds).toHaveBeenLastCalledWith(
+      narrower,
+    );
+  });
+
+  it('leaves a background tab at its last size while no pane is measured', async () => {
     const { service, main } = makeService();
     await service.openTab('run-1', 'https://a.test/', { openedBy: 'Dev' });
     await service.openTab('run-1', 'https://b.test/', { openedBy: 'Dev' });
     service.setBounds('run-1', DOCKED, asWindow(main));
     const background = h.views[0] as FakeView;
+    const calls = background.setBounds.mock.calls.length;
 
-    expect(main.contentView.addChildView).not.toHaveBeenCalledWith(background);
-    expect(background.setBounds).toHaveBeenLastCalledWith({
-      x: 0,
-      y: 0,
-      width: 900,
-      height: 600,
-    });
+    service.setBounds('run-1', null, asWindow(main));
+
+    expect(background.setBounds).toHaveBeenCalledTimes(calls);
+    expect(background.setBounds).toHaveBeenLastCalledWith(DOCKED);
   });
 
   it('leaves a tab without a size when no window is left to read one from', async () => {

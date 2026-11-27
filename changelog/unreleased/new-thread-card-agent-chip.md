@@ -1,0 +1,9 @@
+### Improved
+
+- The manager's New thread card shows the first three lines of a long brief, with Show more to read the rest
+- The manager's New thread card is more compact: Go to thread has no border and sits at the right end of the labels row, and a failed start's reason is shown in red above the labels
+
+### Fixed
+
+- The manager's New thread card shows the agent or team it runs as in full, "Project default" included, instead of cutting it short
+- The manager chat no longer repeats a card in a grey line below it: a started thread, a failed start and a watched thread's finish show only their card

@@ -288,6 +288,7 @@ import type {
 } from './recommendations-apply-context';
 import { formatClockTime } from './relative-time';
 import { OpenReviewCommentContext } from './review-message-card';
+import { rowsShownOnCards } from './rows-shown-on-cards';
 import type { RunConfigDraft } from './run-config';
 import {
   applyRunConfig,
@@ -5030,6 +5031,10 @@ export function Chats({
   // a fresh Set per render would re-render every memoized row shell below.
   const cardBacked = useMemo(
     () => cardBackedRequestIds(transcriptRows),
+    [transcriptRows],
+  );
+  const shownOnCards = useMemo(
+    () => rowsShownOnCards(transcriptRows),
     [transcriptRows],
   );
   const callAnswerPairs = useMemo(
@@ -10998,6 +11003,7 @@ export function Chats({
                         }
                         threadIdentities={hosted?.threadIdentities}
                         threadDoneNewest={threadDoneNewest}
+                        rowsShownOnCards={shownOnCards}
                         threadArchived={threadArchived}
                         threadReports={hosted?.threadReports ?? null}
                         waitingItems={waitingItems}

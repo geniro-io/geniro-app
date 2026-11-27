@@ -18,6 +18,7 @@ import {
   ThreadStartReaderContext,
 } from './thread-start-card';
 import { ThreadOpenContext } from './thread-title';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 import {
   groupTranscript,
   isCardEntry,
@@ -206,6 +207,19 @@ describe('ThreadStartCard', () => {
     expect(container.textContent).toContain('Project default');
   });
 
+  it('lets the agent chip take its whole width in the wrapping labels row, as the project chip does', async () => {
+    await render(<ThreadStartCard pair={pair(FILED)} />, null);
+    const agent = container.querySelector('[data-slot="thread-start-agent"]');
+    const project = container.querySelector(
+      '[data-slot="thread-start-project"]',
+    );
+    expect(
+      container.querySelector('[data-slot="thread-start-labels"]')?.classList,
+    ).toContain('flex-wrap');
+    expect(agent?.classList).not.toContain('max-w-28');
+    expect(agent?.className).toBe(project?.className);
+  });
+
   it('moves from Starting to Started on the card’s own change, and opens the started thread', async () => {
     let current = card({
       startRequest: {
@@ -217,7 +231,7 @@ describe('ThreadStartCard', () => {
     const open = vi.fn<(runId: string) => void>();
     await render(<ThreadStartCard pair={pair(FILED)} />, reader, open);
     expect(stateText()).toBe('Starting…');
-    expect(container.querySelector('[data-slot="thread-card-go"]')).toBeNull();
+    expect(container.querySelector('[data-slot="thread-start-go"]')).toBeNull();
 
     current = card({
       runId: 'run-new',
@@ -242,7 +256,7 @@ describe('ThreadStartCard', () => {
         ?.getAttribute('title'),
     ).toContain('In progress');
     const button = container.querySelector<HTMLButtonElement>(
-      '[data-slot="thread-card-go"]',
+      '[data-slot="thread-start-go"]',
     );
     expect(button).not.toBeNull();
     expect(
@@ -455,6 +469,77 @@ describe('ThreadStartCard — a thread filed with no board card', () => {
     expect(stateText()).toBe('Waiting for your Start');
   });
 
+  it('draws no Show more under a brief that fits its three lines', async () => {
+    const { reader } = fakeThreadReader(() =>
+      Promise.resolve(start('started', { runId: 'thread-1' })),
+    );
+    await renderThread(reader);
+
+    const brief = container.querySelector('[data-slot="thread-start-brief"]');
+    expect(brief?.classList.contains('line-clamp-3')).toBe(true);
+    expect(container.textContent).not.toContain('Show more');
+  });
+
+  it('holds a longer brief to three lines with a Show more that unfolds it, remembered in the thread', async () => {
+    const heights = (element: HTMLElement): boolean =>
+      element.dataset.slot === 'thread-start-brief' &&
+      element.classList.contains('line-clamp-3');
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return heights(this) ? 120 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return heights(this) ? 48 : 0;
+      },
+    });
+    try {
+      const { reader } = fakeThreadReader(() =>
+        Promise.resolve(start('started', { runId: 'thread-1' })),
+      );
+      const draw = (): Promise<void> =>
+        act(async () => {
+          root.render(
+            <ThreadUiMemoryContext.Provider value="brief-run">
+              <ThreadStartReaderContext.Provider value={reader}>
+                <ThreadStartCard pair={pair(STARTED_ANSWER, ARGS)} />
+              </ThreadStartReaderContext.Provider>
+            </ThreadUiMemoryContext.Provider>,
+          );
+        });
+      const brief = (): Element | null =>
+        container.querySelector('[data-slot="thread-start-brief"]');
+      const toggle = (): HTMLButtonElement | undefined =>
+        [...container.querySelectorAll('button')].find((button) =>
+          /Show (more|less)/.test(button.textContent ?? ''),
+        );
+      await draw();
+
+      expect(brief()?.classList.contains('line-clamp-3')).toBe(true);
+      expect(toggle()?.textContent).toBe(' Show more');
+      expect(toggle()?.querySelector('svg')).not.toBeNull();
+
+      await act(async () => {
+        toggle()?.click();
+      });
+      expect(brief()?.classList.contains('line-clamp-3')).toBe(false);
+      expect(toggle()?.textContent).toBe(' Show less');
+
+      await act(async () => {
+        root.render(null);
+      });
+      await draw();
+      expect(brief()?.classList.contains('line-clamp-3')).toBe(false);
+      expect(toggle()?.textContent).toBe(' Show less');
+    } finally {
+      delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+      delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    }
+  });
+
   it('reads an approved start as Starting and a declined one as Declined', async () => {
     const approved = fakeThreadReader(() => Promise.resolve(start('approved')));
     await renderThread(approved.reader);
@@ -480,6 +565,33 @@ describe('ThreadStartCard — a thread filed with no board card', () => {
     ).toBe('The project has no agent configured');
   });
 
+  it('puts Go to thread borderless at the end of the labels row, after the chips', async () => {
+    const { reader } = fakeThreadReader(() =>
+      Promise.resolve(start('started', { runId: 'run-7' })),
+    );
+    await renderThread(reader, vi.fn());
+
+    const labels = container.querySelector('[data-slot="thread-start-labels"]');
+    const button = container.querySelector('[data-slot="thread-start-go"]');
+    expect(button?.closest('[data-slot="thread-start-labels"]')).toBe(labels);
+    expect(labels?.lastElementChild?.contains(button ?? null)).toBe(true);
+    expect(labels?.lastElementChild?.classList).toContain('ml-auto');
+    expect(button?.className).not.toMatch(/(^|\s)border(\s|$)/);
+  });
+
+  it('shows a failed start’s reason above the labels, in the blocked tone', async () => {
+    const { reader } = fakeThreadReader(() =>
+      Promise.resolve(start('failed', { failure: 'No agent configured' })),
+    );
+    await renderThread(reader);
+
+    const note = container.querySelector('[data-slot="thread-start-note"]');
+    expect(note?.classList).toContain('text-destructive');
+    expect(note?.nextElementSibling?.getAttribute('data-slot')).toBe(
+      'thread-start-labels',
+    );
+  });
+
   it('shows Started, and opens the thread that started', async () => {
     const { reader } = fakeThreadReader(() =>
       Promise.resolve(start('started', { runId: 'run-7' })),
@@ -489,7 +601,7 @@ describe('ThreadStartCard — a thread filed with no board card', () => {
 
     expect(stateText()).toBe('Started');
     const button = container.querySelector<HTMLButtonElement>(
-      '[data-slot="thread-card-go"]',
+      '[data-slot="thread-start-go"]',
     );
     expect(button).not.toBeNull();
     act(() => button!.click());

@@ -4,6 +4,26 @@ import { cn } from '../components/ui/utils';
 import { MarkdownContent } from './markdown-content';
 import { useThreadFlag } from './thread-ui-memory';
 
+/** The look of every Show more / Show less toggle in a transcript. */
+export const SHOW_MORE_TOGGLE_CLASS =
+  'flex items-center gap-0.5 text-muted-foreground transition-colors hover:text-foreground';
+
+export function ShowMoreLabel({
+  expanded,
+}: {
+  expanded: boolean;
+}): React.JSX.Element {
+  return expanded ? (
+    <>
+      <ChevronUp aria-hidden="true" className="size-3" /> Show less
+    </>
+  ) : (
+    <>
+      <ChevronDown aria-hidden="true" className="size-3" /> Show more
+    </>
+  );
+}
+
 /** Whether a text runs past `lines` lines once drawn, judged from the text itself. */
 export function isLongMarkdown(text: string, lines: number): boolean {
   return text.split('\n').length > lines || text.length > lines * 80;
@@ -57,20 +77,9 @@ export function ClampedBlock({
         <button
           type="button"
           data-slot={`${slot}-toggle`}
-          className={cn(
-            'mt-1.5 flex items-center gap-0.5 text-muted-foreground transition-colors hover:text-foreground',
-            toggleClassName,
-          )}
+          className={cn('mt-1.5', SHOW_MORE_TOGGLE_CLASS, toggleClassName)}
           onClick={() => setExpanded((value) => !value)}>
-          {expanded ? (
-            <>
-              <ChevronUp aria-hidden="true" className="size-3" /> Show less
-            </>
-          ) : (
-            <>
-              <ChevronDown aria-hidden="true" className="size-3" /> Show more
-            </>
-          )}
+          <ShowMoreLabel expanded={expanded} />
         </button>
       ) : null}
     </div>

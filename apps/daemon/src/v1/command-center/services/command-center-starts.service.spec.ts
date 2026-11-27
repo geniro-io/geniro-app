@@ -11,7 +11,6 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { HostWakeBus } from '../../agents/services/host-wake.bus';
-import type { RunNoticeWriter } from '../../agents/services/run-notice.writer';
 import type { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { TaskDao } from '../../tasks/dao/task.dao';
@@ -110,9 +109,6 @@ describe('CommandCenterStartsService', () => {
     >
   >;
   let wakePublish: ReturnType<typeof vi.fn<(wake: Wake) => void>>;
-  let noticeInfo: ReturnType<
-    typeof vi.fn<(runId: string, message: string) => Promise<void>>
-  >;
   let addToRoster: ReturnType<
     typeof vi.fn<
       (
@@ -204,7 +200,6 @@ describe('CommandCenterStartsService', () => {
         ) => void
       >();
     wakePublish = vi.fn<(wake: Wake) => void>();
-    noticeInfo = vi.fn(() => Promise.resolve());
     addToRoster = vi.fn(() => Promise.resolve());
     rosterThreads = vi.fn(() => Promise.resolve([]));
     listAll = vi.fn(() => Promise.resolve([project]));
@@ -234,7 +229,6 @@ describe('CommandCenterStartsService', () => {
       { create: createTask, announceInPlace } as unknown as TasksService,
       taskEvents,
       { addToRoster, rosterThreads } as unknown as CommandCenterChatService,
-      { info: noticeInfo } as unknown as RunNoticeWriter,
       new CommandCenterThreadStartDao(db.em),
       { startProjectRun } as unknown as TaskRunsService,
       agentEvents,
@@ -576,7 +570,7 @@ describe('CommandCenterStartsService', () => {
   });
 
   describe('the report of a started thread', () => {
-    it('puts the thread on the manager roster and writes its Started row without waking the manager', async () => {
+    it('puts the thread on the manager roster without waking the manager', async () => {
       const task = await seedTask({
         startRequestedAt: null,
         startRequestedByRunId: MANAGER,
@@ -585,17 +579,14 @@ describe('CommandCenterStartsService', () => {
 
       startedEvent(task.id);
 
-      await vi.waitFor(() => expect(noticeInfo).toHaveBeenCalledTimes(1));
-      expect(addToRoster).toHaveBeenCalledWith(
-        MANAGER,
-        [THREAD],
-        'manager',
-        null,
-        false,
-      );
-      expect(noticeInfo).toHaveBeenCalledWith(
-        MANAGER,
-        'Started "Billing cache"',
+      await vi.waitFor(() =>
+        expect(addToRoster).toHaveBeenCalledWith(
+          MANAGER,
+          [THREAD],
+          'manager',
+          null,
+          false,
+        ),
       );
       expect(wakePublish).not.toHaveBeenCalled();
       expect((await taskOf(task.id)).startRequestedByRunId).toBeNull();
@@ -612,7 +603,6 @@ describe('CommandCenterStartsService', () => {
       await Promise.all([reports.reportStarted(), reports.reportStarted()]);
 
       expect(addToRoster).toHaveBeenCalledTimes(1);
-      expect(noticeInfo).toHaveBeenCalledTimes(1);
     });
 
     it('gives the report back when telling the manager fails, so the next report tells it', async () => {
@@ -629,12 +619,13 @@ describe('CommandCenterStartsService', () => {
       await vi.waitFor(async () =>
         expect((await taskOf(task.id)).startRequestedByRunId).toBe(MANAGER),
       );
-      expect(noticeInfo).not.toHaveBeenCalled();
 
       startedEvent(task.id);
 
-      await vi.waitFor(() => expect(noticeInfo).toHaveBeenCalledTimes(1));
-      expect(addToRoster).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() => expect(addToRoster).toHaveBeenCalledTimes(2));
+      await vi.waitFor(async () =>
+        expect((await taskOf(task.id)).startRequestedByRunId).toBeNull(),
+      );
       expect(wakePublish).not.toHaveBeenCalled();
     });
   });
@@ -680,7 +671,6 @@ describe('CommandCenterStartsService', () => {
       await reports.reportStarted();
 
       expect(addToRoster).not.toHaveBeenCalled();
-      expect(noticeInfo).not.toHaveBeenCalled();
       expect(wakePublish).not.toHaveBeenCalled();
       expect((await taskOf(task.id)).startRequestedByRunId).toBe(ANALYSIS_RUN);
     });
@@ -977,11 +967,7 @@ describe('CommandCenterStartsService', () => {
           'watch billing',
           true,
         );
-        expect(noticeInfo).toHaveBeenCalledTimes(1);
-        expect(noticeInfo).toHaveBeenCalledWith(
-          MANAGER,
-          'Started "Billing cache"',
-        );
+        expect(addToRoster).toHaveBeenCalledTimes(1);
         expect(await threads().read(row.id)).toMatchObject({
           runId: THREAD,
           reportedAt: expect.any(Date),
@@ -1010,7 +996,6 @@ describe('CommandCenterStartsService', () => {
         ).rejects.toThrow('no such folder');
 
         expect(addToRoster).not.toHaveBeenCalled();
-        expect(noticeInfo).not.toHaveBeenCalled();
         expect(await service.approvedStarts()).toEqual([
           expect.objectContaining({ kind: 'thread', startId: row.id }),
         ]);
@@ -1156,10 +1141,11 @@ describe('CommandCenterStartsService', () => {
         service.onApplicationBootstrap();
 
         await vi.waitFor(() =>
-          expect(noticeInfo).toHaveBeenCalledWith(
+          expect(addToRoster.mock.calls[0]?.slice(0, 3)).toEqual([
             MANAGER,
-            'Started "Billing cache"',
-          ),
+            [THREAD],
+            'manager',
+          ]),
         );
         expect((await service.threadStartState(row.id)).state).toBe('started');
         expect(wakePublish).not.toHaveBeenCalled();
@@ -1176,17 +1162,13 @@ describe('CommandCenterStartsService', () => {
         service.onApplicationBootstrap();
 
         await vi.waitFor(() =>
-          expect(noticeInfo).toHaveBeenCalledWith(
+          expect(addToRoster).toHaveBeenCalledWith(
             MANAGER,
-            'Started "Billing cache"',
+            [THREAD],
+            'manager',
+            'watch billing',
+            true,
           ),
-        );
-        expect(addToRoster).toHaveBeenCalledWith(
-          MANAGER,
-          [THREAD],
-          'manager',
-          'watch billing',
-          true,
         );
         expect(await threads().read(row.id)).toMatchObject({
           reportedAt: expect.any(Date),

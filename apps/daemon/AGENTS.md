@@ -73,7 +73,7 @@ Each area's invariants are a rule in `.claude/rules/` (table below), loaded when
   - Dev-only: `db/seed.ts` and `db/seeders/` are excluded from the build, and `SeedManager` is registered in the seed entry point, never in `mikro-orm.config.ts` (`@mikro-orm/seeder` is a devDependency stripped from the packaged daemon).
 - An adapter spawns only through `start()` / `runCommand()`.
 - The boot's close of stranded work (`StrandedWorkReconcileService`: background delegates, detached commands, command actions, monitors, in that order, before listen) reads only the runs whose newest item seq differs from `Run.reconciledThroughSeq` (null for a run it never read), then records each run it left with nothing open through its newest seq. A run any of them failed on, or a chat whose interrupted monitor waits on its delivery after listen, keeps its old mark and is read again next launch.
-- Work an update or a deliberate restart cut off is kept open by the shutdown, recorded by the boot reconciles (`Run.restartContinuation`) and continued after listen by `RestartContinuationService` (`.claude/rules/daemon-teams-passes.md` → Restart continuation).
+- Work an update or a deliberate restart cut off — and a team run's after a quit — is kept open by the shutdown, recorded by the boot reconciles (`Run.restartContinuation`) and continued after listen by `RestartContinuationService`; a team run a crash cut off is held until the user chooses to continue it (`.claude/rules/daemon-teams-passes.md` → Restart continuation).
 
 ### Migrations
 

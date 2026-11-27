@@ -319,8 +319,10 @@ bootstrapper.addExtension(
         chats: app.get(ChatService),
         teams: app.get(TeamExecutorService),
         tasks: app.get(TaskSettleService),
-        dropRestartContinuations: () =>
-          app.get(RunDao).clearRestartContinuations(),
+        dropChatRestartContinuations: () =>
+          app.get(RunDao).clearChatRestartContinuations(),
+        holdTeamRestartContinuations: () =>
+          app.get(RestartContinuationService).holdTeamContinuations(),
         logError: (message) => new Logger('TaskSettleService').error(message),
       });
 

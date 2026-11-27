@@ -116,7 +116,7 @@ describe('continuesUnattended', () => {
     expect(continuesUnattended('unknown')).toBe(false);
   });
 
-  it('leaves a quit to the board, which resumes it without continuing it', () => {
+  it('continues a team run after a quit but leaves a chat cut off by one', () => {
     expect(resumesUnattended('quit')).toBe(true);
     expect(continuesUnattended('quit')).toBe(false);
   });

@@ -88,24 +88,30 @@ describe('closeInterruptedRuns', () => {
   });
 
   it.each([
-    ['crash', true],
-    ['quit', true],
-    ['unknown', true],
-    ['self-update', false],
-    ['restart', false],
+    ['crash', true, true],
+    ['unknown', true, true],
+    ['quit', true, false],
+    ['self-update', false, false],
+    ['restart', false, false],
   ] as const)(
-    'after a %s drops continuations no drain reached first: %s',
-    async (cause, drops) => {
+    'after a %s, before the reconciles, drops chat continuations: %s, holds team ones: %s',
+    async (cause, dropsChats, holdsTeams) => {
       const h = harness();
       h.deps.readStop = () => ({ cause, detail: null });
-      const dropped: string[] = [];
+      const touched: string[] = [];
       await closeInterruptedRuns({
         ...h.deps,
-        dropRestartContinuations: async () => {
-          dropped.push(h.calls.length === 0 ? 'before-reconciles' : 'late');
+        dropChatRestartContinuations: async () => {
+          touched.push(`drop:${h.calls.length === 0 ? 'before' : 'late'}`);
+        },
+        holdTeamRestartContinuations: async () => {
+          touched.push(`hold:${h.calls.length === 0 ? 'before' : 'late'}`);
         },
       });
-      expect(dropped).toEqual(drops ? ['before-reconciles'] : []);
+      expect(touched).toEqual([
+        ...(dropsChats ? ['drop:before'] : []),
+        ...(holdsTeams ? ['hold:before'] : []),
+      ]);
     },
   );
 

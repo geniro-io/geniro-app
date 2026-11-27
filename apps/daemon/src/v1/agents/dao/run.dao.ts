@@ -1291,10 +1291,10 @@ export class RunDao extends BaseDao<Run> {
     );
   }
 
-  /** Forget every run's continuation record at once. */
-  async clearRestartContinuations(txEm?: EntityManager): Promise<void> {
+  /** Forget every chat's continuation record at once. */
+  async clearChatRestartContinuations(txEm?: EntityManager): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
-      { restartContinuation: { $ne: null } },
+      { restartContinuation: { $ne: null }, teamId: null },
       { restartContinuation: null },
     );
   }

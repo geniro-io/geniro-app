@@ -1,6 +1,7 @@
 import {
   type InterruptCause,
   interruptCauseClause,
+  parseInterruptCause,
 } from '../../../utils/stop-cause';
 import type {
   RestartContinuation,
@@ -31,12 +32,14 @@ export function readRestartContinuation(
     return null;
   }
   const record = asRecord(parsed);
-  const cause = asString(record?.cause);
-  if (cause !== 'self-update' && cause !== 'restart') {
+  const written = asString(record?.cause);
+  const cause = parseInterruptCause(written);
+  if (written === null || cause !== written) {
     return null;
   }
   const continuation: RestartContinuation = {
     cause,
+    held: asBoolean(record?.held),
     turns: asArray(record?.turns).flatMap(readTurn),
     calls: asArray(record?.calls).flatMap(readCall),
     failedCalls: asArray(record?.failedCalls).flatMap(readFailedCall),
@@ -67,7 +70,8 @@ export function isEmptyContinuation(
 
 /**
  * Two records of one run joined — what a second boot finds still owed beside
- * what this boot adds — each entry once, the newer cause kept.
+ * what this boot adds — each entry once, the newer cause kept unless the older
+ * record waits for the user's choice, which then still waits, under its cause.
  */
 export function mergeRestartContinuations(
   older: RestartContinuation | null,
@@ -76,6 +80,7 @@ export function mergeRestartContinuations(
   if (older === null) {
     return newer;
   }
+  const held = older.held || newer.held;
   const turns = new Map(
     [...older.turns, ...newer.turns].map((turn) => [turn.memberId, turn]),
   );
@@ -97,7 +102,8 @@ export function mergeRestartContinuations(
     ]),
   );
   return {
-    cause: newer.cause,
+    cause: older.held ? older.cause : newer.cause,
+    held,
     turns: [...turns.values()],
     calls: [...calls.values()],
     failedCalls: [...failedCalls.values()],
@@ -214,7 +220,7 @@ export function restartContinuationPrompt(
   const parts = [
     working === 'idle'
       ? `[geniro] ${head} while you were waiting.`
-      : `[geniro] ${head} while you were working${working === 'call' ? ' on this call' : ''}. That stop was geniro's, not the user's: a "user doesn't want to proceed" or "stop and wait" note it left in your transcript does not apply. ${fresh ? 'Check' : 'Your session is intact — check'} what is already done, run the interrupted command again, then carry on${working === 'call' ? ' and answer the call' : ''}.`,
+      : `[geniro] ${head} while you were working${working === 'call' ? ' on this call' : ''}. That stop was geniro's, not the user's: a "user doesn't want to proceed" or "stop and wait" note it left in your transcript does not apply. ${fresh ? 'Check' : 'Your session is intact — check'} what is already done, run the interrupted command again, then carry on${working === 'call' ? ' and answer the call' : ''}. The interrupted command may still be running: check for it before you run it again.`,
   ];
   if (calls.length > 0) {
     const named = calls

@@ -1,5 +1,9 @@
 import type { PreviousStop } from './previous-stop';
-import { continuesUnattended, type InterruptCause } from './stop-cause';
+import {
+  continuesUnattended,
+  type InterruptCause,
+  resumesUnattended,
+} from './stop-cause';
 
 /** What the boot needs from each service that closes an interrupted run. */
 export interface InterruptedRunsDeps {
@@ -19,10 +23,16 @@ export interface InterruptedRunsDeps {
   };
   tasks: { settleCutOffCards: (projectId: null) => Promise<void> };
   /**
-   * Forget every continuation an earlier boot recorded and no drain reached —
-   * called when this stop is not one the daemon continues after.
+   * Forget every chat's continuation an earlier boot recorded and no drain
+   * reached — called when this stop is not one a chat continues after.
    */
-  dropRestartContinuations?: () => Promise<void>;
+  dropChatRestartContinuations?: () => Promise<void>;
+  /**
+   * Make every team run's continuation an earlier boot recorded wait for the
+   * user's choice — called when this stop is not one a team run continues
+   * after unattended.
+   */
+  holdTeamRestartContinuations?: () => Promise<void>;
   logError: (message: string) => void;
 }
 
@@ -42,11 +52,18 @@ export async function closeInterruptedRuns(
   const stop = deps.readStop();
   const { cause, detail } = stop;
   // Before the reconciles: a record left over from an update the daemon then
-  // crashed out of must not be continued, nor read as already announced.
+  // crashed out of must not be continued unasked, nor read as already announced.
   if (!continuesUnattended(cause)) {
-    await deps.dropRestartContinuations?.().catch((err: unknown) => {
+    await deps.dropChatRestartContinuations?.().catch((err: unknown) => {
       deps.logError(
-        `could not drop the continuations a crash cut short: ${err instanceof Error ? err.message : String(err)}`,
+        `could not drop the chat continuations a crash cut short: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+  if (!resumesUnattended(cause)) {
+    await deps.holdTeamRestartContinuations?.().catch((err: unknown) => {
+      deps.logError(
+        `could not hold the team continuations a crash cut short: ${err instanceof Error ? err.message : String(err)}`,
       );
     });
   }

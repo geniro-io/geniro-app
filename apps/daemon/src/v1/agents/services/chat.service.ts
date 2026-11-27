@@ -1080,6 +1080,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             restartContinuationColumn(
               mergeRestartContinuations(owed, {
                 cause,
+                held: false,
                 turns: [{ memberId: SINGLE_AGENT_NODE }],
                 calls: [],
                 failedCalls: [],

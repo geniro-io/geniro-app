@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
-import { Injectable, type OnModuleInit, Optional } from '@nestjs/common';
+import {
+  type BeforeApplicationShutdown,
+  Injectable,
+  type OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 
 import { awakeTimeout, type AwakeTimer } from '../../../utils/sleep-watch';
 import type {
@@ -154,6 +159,11 @@ const TIMED_OUT = Symbol('await-timed-out');
  */
 const INTERRUPTED = Symbol('await-interrupted');
 
+/** A wait released because the daemon is stopping, on {@link TIMED_OUT}'s terms. */
+const STOPPING = Symbol('await-stopping');
+
+type WaitRelease = typeof INTERRUPTED | typeof STOPPING;
+
 /**
  * The share of a caller CLI's tool-call deadline (`AdapterConfig.mcp.
  * toolCallDeadlineMs`) one wait may take; the rest is margin for the answer to
@@ -189,6 +199,11 @@ const USER_MESSAGE_NOTE =
   'A message reached you while you were waiting, from the user or from another thread, and it says which — it is delivered right after this result. ' +
   'Read it and respond to it first. Your calls are untouched and still running: collect them with await_agent afterwards ' +
   '(if you have already answered that message, simply wait again).';
+
+/** What a caller released by {@link STOPPING} is told to do next. */
+const DAEMON_STOPPING_NOTE =
+  'geniro is shutting down, so this wait ended early. Nothing was cancelled: end your turn — ' +
+  'when geniro starts again it tells you what became of your calls.';
 
 interface AsyncCallEntry {
   /**
@@ -556,7 +571,7 @@ interface RunCallState {
    * The release of every wait each caller has open right now (caller key → one
    * resolver per wait) — what {@link CallBroker.interruptWaits} calls.
    */
-  waitReleases: Map<string, Set<() => void>>;
+  waitReleases: Map<string, Set<(reason: WaitRelease) => void>>;
   /**
    * Owners in the GAP after their last wait returned (caller key → the timer
    * that ends it, {@link AWAIT_GAP_GRACE_MS}). Counted in `awaitingCalls`
@@ -880,8 +895,10 @@ function wakeNotice(
  * round-trip.
  */
 @Injectable()
-export class CallBroker implements OnModuleInit {
+export class CallBroker implements OnModuleInit, BeforeApplicationShutdown {
   private readonly runs = new Map<string, RunCallState>();
+
+  private stopping = false;
 
   /**
    * Which pool members are spent, for every run. The executor records every
@@ -1062,9 +1079,25 @@ export class CallBroker implements OnModuleInit {
       return false;
     }
     for (const release of [...releases]) {
-      release();
+      release(INTERRUPTED);
     }
     return true;
+  }
+
+  /**
+   * The HTTP server closes only once every request has answered, and the
+   * sessions that would end a callee close after it: a wait left open holds
+   * the whole shutdown until the app kills the daemon.
+   */
+  beforeApplicationShutdown(): void {
+    this.stopping = true;
+    for (const state of this.runs.values()) {
+      for (const releases of state.waitReleases.values()) {
+        for (const release of [...releases]) {
+          release(STOPPING);
+        }
+      }
+    }
   }
 
   /**
@@ -1194,15 +1227,18 @@ export class CallBroker implements OnModuleInit {
     state: RunCallState,
     owner: string,
     wait: () => Promise<T>,
-  ): Promise<T | typeof INTERRUPTED> {
+  ): Promise<T | WaitRelease> {
+    if (this.stopping) {
+      return STOPPING;
+    }
     // A message the user sent before this wait began, which the CLI has not
     // taken yet: it would be held for the whole wait.
     if (state.unreadUserMessages.delete(owner)) {
       return INTERRUPTED;
     }
-    let release: () => void = () => {};
-    const interrupted = new Promise<typeof INTERRUPTED>((resolve) => {
-      release = () => resolve(INTERRUPTED);
+    let release: (reason: WaitRelease) => void = () => {};
+    const interrupted = new Promise<WaitRelease>((resolve) => {
+      release = resolve;
     });
     const releases = state.waitReleases.get(owner) ?? new Set();
     releases.add(release);
@@ -1213,7 +1249,10 @@ export class CallBroker implements OnModuleInit {
     let gap = false;
     try {
       const outcome = await Promise.race([wait(), interrupted]);
-      gap = outcome !== INTERRUPTED && outcome !== ABANDONED;
+      gap =
+        outcome !== INTERRUPTED &&
+        outcome !== STOPPING &&
+        outcome !== ABANDONED;
       return outcome;
     } finally {
       releases.delete(release);
@@ -1436,6 +1475,16 @@ export class CallBroker implements OnModuleInit {
           agent: calleeId,
           interrupted: 'user_message',
           note: USER_MESSAGE_NOTE,
+        };
+      }
+      if (outcome === STOPPING) {
+        lease.release();
+        makeCollectable(state, callId, call);
+        return {
+          status: 'pending',
+          call_id: callId,
+          agent: calleeId,
+          note: DAEMON_STOPPING_NOTE,
         };
       }
       if (outcome.status === 'question') {
@@ -2123,7 +2172,8 @@ export class CallBroker implements OnModuleInit {
     if (
       envelope === ABANDONED ||
       envelope === TIMED_OUT ||
-      envelope === INTERRUPTED
+      envelope === INTERRUPTED ||
+      envelope === STOPPING
     ) {
       lease.release();
     }
@@ -2157,6 +2207,14 @@ export class CallBroker implements OnModuleInit {
         agent: entry.calleeId,
         interrupted: 'user_message',
         note: USER_MESSAGE_NOTE,
+      };
+    }
+    if (envelope === STOPPING) {
+      return {
+        status: 'pending',
+        call_id: callId,
+        agent: entry.calleeId,
+        note: DAEMON_STOPPING_NOTE,
       };
     }
     if (envelope.status === 'question') {
@@ -2333,7 +2391,11 @@ export class CallBroker implements OnModuleInit {
       if (outcome === ABANDONED) {
         return abandoned;
       }
-      if (outcome === TIMED_OUT || outcome === INTERRUPTED) {
+      if (
+        outcome === TIMED_OUT ||
+        outcome === INTERRUPTED ||
+        outcome === STOPPING
+      ) {
         const waitingOn = open.map(([callId, entry]) => ({
           call_id: callId,
           agent: entry.calleeId,
@@ -2345,6 +2407,7 @@ export class CallBroker implements OnModuleInit {
           ...(outcome === INTERRUPTED
             ? { interrupted: 'user_message' as const, note: USER_MESSAGE_NOTE }
             : {}),
+          ...(outcome === STOPPING ? { note: DAEMON_STOPPING_NOTE } : {}),
         };
       }
       if (outcome.envelope.status === 'question') {

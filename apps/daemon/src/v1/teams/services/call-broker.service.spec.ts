@@ -5754,6 +5754,86 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
   });
 });
 
+describe('CallBroker — the daemon stops while a caller waits', () => {
+  // The HTTP server closes only after every request answered, and the
+  // sessions that end a callee close after it: an open await_agent held the
+  // shutdown until the app killed the daemon.
+  const started = async (broker: CallBroker): Promise<void> => {
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+  };
+  it('releases an open await_agent with a pending that consumes nothing', async () => {
+    const { broker, items } = harness({ launch: 'defer' });
+    await started(broker);
+    const waiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    broker.beforeApplicationShutdown();
+    const envelope = await waiting;
+    expect(envelope).toEqual({
+      status: 'pending',
+      call_id: 'call-1',
+      agent: 'helper',
+      note: expect.stringContaining('geniro is shutting down'),
+    });
+    expect(items.map((i) => i.kind)).toEqual(['call_started']);
+    expect(broker.awaitingCalls('run-1')).toBe(0);
+  });
+
+  it('releases a wait over ALL calls, naming what it was waiting on', async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await started(broker);
+    const waiting = broker.awaitAgent('run-1', 'orch', {});
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    broker.beforeApplicationShutdown();
+    expect(await waiting).toMatchObject({
+      status: 'pending',
+      waiting_on: [{ call_id: 'call-1', agent: 'helper' }],
+      note: expect.stringContaining('geniro is shutting down'),
+    });
+  });
+
+  it('releases a SYNC call_agent and leaves the call await-collectable', async () => {
+    const { broker } = harness({ launch: 'defer' });
+    const calling = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    broker.beforeApplicationShutdown();
+    expect(await calling).toMatchObject({
+      status: 'pending',
+      call_id: 'call-1',
+      agent: 'helper',
+      note: expect.stringContaining('geniro is shutting down'),
+    });
+  });
+
+  it('answers a wait that starts after the stop began at once', async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await started(broker);
+    broker.beforeApplicationShutdown();
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toMatchObject({
+      status: 'pending',
+      call_id: 'call-1',
+      note: expect.stringContaining('geniro is shutting down'),
+    });
+  });
+});
+
 describe('CallBroker — agent pool', () => {
   // A pool of two on different CLIs, so a launch's `agent` says which member
   // the broker picked.

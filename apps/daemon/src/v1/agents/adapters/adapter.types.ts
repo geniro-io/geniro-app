@@ -728,8 +728,9 @@ export type AgentErrorRecovery = 'cli-login';
  *   daemon restarting beneath a run is the case this exists for, and a turn that
  *   could not be started, or whose bookkeeping write failed, reads the same way
  *   to a caller — nothing about the work was wrong, so retrying once is right.
- *   A call cut off by an update or a restart is continued once; one cut off
- *   again while being continued fails with this class at the next boot.
+ *   A call cut off by an update or a restart is continued once; one an update
+ *   or a restart cuts off again while being continued fails with this class at
+ *   the next boot.
  * - `crashed` — the CLI reported a failure this layer does not recognise. The
  *   honest default, and deliberately the one with no special handling: retry
  *   once, then report.

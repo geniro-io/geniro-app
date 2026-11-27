@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { DAEMON_STOP_CAUSES } from '../../utils/stop-cause';
 import {
   AGENT_ICON_NAMES,
   type AgentFailureClass,
@@ -1335,6 +1336,32 @@ export const TeamChatsDiscardedSchema = z.object({
   deleted: z.number().int(),
 });
 export type TeamChatsDiscarded = z.infer<typeof TeamChatsDiscardedSchema>;
+
+/** A team run a crash cut off, waiting for the user's choice to continue it. */
+export const HeldRunSchema = z
+  .object({
+    runId: z.string(),
+    title: z.string().nullable(),
+    cause: z.enum([...DAEMON_STOP_CAUSES, 'unknown']),
+  })
+  .meta({ id: 'HeldRun' });
+export type HeldRun = z.infer<typeof HeldRunSchema>;
+
+export const HeldRunsSchema = z.object({ runs: z.array(HeldRunSchema) });
+export type HeldRuns = z.infer<typeof HeldRunsSchema>;
+
+/** The user's choice on the held runs they were shown; any other run is left alone. */
+export const AnswerHeldRunsSchema = z.object({
+  continueRunIds: z.array(z.string()).max(500),
+  declineRunIds: z.array(z.string()).max(500),
+});
+export type AnswerHeldRuns = z.infer<typeof AnswerHeldRunsSchema>;
+
+export const HeldRunsAnsweredSchema = z.object({
+  continued: z.array(z.string()),
+  declined: z.array(z.string()),
+});
+export type HeldRunsAnswered = z.infer<typeof HeldRunsAnsweredSchema>;
 
 /**
  * The team ONE RUN runs — the copy it keeps (`Run.teamSnapshot`), never

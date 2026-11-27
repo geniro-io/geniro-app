@@ -4,6 +4,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
   continuesUnattended,
   type InterruptCause,
+  resumesUnattended,
 } from '../../../utils/stop-cause';
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import type { Item } from '../../runs/entity/item.entity';
@@ -242,8 +243,9 @@ export class MonitorOutcomeSweep {
     };
     const live = run.archivedAt === null && run.status !== 'cancelled';
     const owed = readRestartContinuation(run.restartContinuation ?? null);
-    const continued =
-      live && continuesUnattended(cause) && (!isChat || owed !== null);
+    const continued = isChat
+      ? live && continuesUnattended(cause) && owed !== null
+      : live;
     if (continued) {
       const monitors: RestartContinuationMonitor[] = cutOff.map((monitor) => ({
         memberId: isChat ? null : monitor.memberId,
@@ -255,6 +257,7 @@ export class MonitorOutcomeSweep {
         restartContinuationColumn(
           mergeRestartContinuations(owed, {
             cause,
+            held: !resumesUnattended(cause),
             turns: [],
             calls: [],
             failedCalls: [],

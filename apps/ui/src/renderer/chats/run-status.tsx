@@ -316,11 +316,20 @@ export function displayRunStatus({
  * (which rides the run row) was still correct. The daemon owns the FACT (which
  * kind is open); the wording is presentation.
  */
-export function awaitingPhrase(kind: RunAwaiting): string {
+export function awaitingPhrase(kind: RowAwaiting): string {
   return kind === 'question'
     ? 'waiting for your answer'
-    : 'waiting for approval';
+    : kind === 'continue'
+      ? 'waiting for you to continue it'
+      : 'waiting for approval';
 }
+
+/**
+ * What a sidebar row waits on the user for: the run row's open card, or
+ * `continue` for a team run a crash cut off that the daemon holds until the
+ * user chooses whether to continue it (`GET /v1/interrupted-runs`).
+ */
+export type RowAwaiting = RunAwaiting | 'continue';
 
 /**
  * What a RUNNING run is doing when the daemon has named nothing.

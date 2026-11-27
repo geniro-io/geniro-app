@@ -19,11 +19,14 @@ import type {
   AnalysisJudgeCheckDto,
   AnalysisRunsCountDto,
   AnalyzeTeamDto,
+  AnswerHeldRunsDto,
   CancelledDto,
   CreateTeamDto,
   ExportTeamDto,
   ExportedDto,
   FreshSessionBasesDto,
+  HeldRunsAnsweredDto,
+  HeldRunsDto,
   ImportTeamDto,
   InstructionSizesDto,
   ItemDto,
@@ -66,6 +69,10 @@ import type {
 export interface TeamsApiAnalyzeTeamRequest {
     slug: string;
     analyzeTeamDto: AnalyzeTeamDto;
+}
+
+export interface TeamsApiAnswerHeldRunsRequest {
+    answerHeldRunsDto: AnswerHeldRunsDto;
 }
 
 export interface TeamsApiCancelTeamRunRequest {
@@ -312,6 +319,53 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async analyzeTeam(requestParameters: TeamsApiAnalyzeTeamRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.analyzeTeamRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async answerHeldRunsRaw(requestParameters: TeamsApiAnswerHeldRunsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<HeldRunsAnsweredDto>> {
+        if (requestParameters['answerHeldRunsDto'] == null) {
+            throw new runtime.RequiredError(
+                'answerHeldRunsDto',
+                'Required parameter "answerHeldRunsDto" was null or undefined when calling answerHeldRuns().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/interrupted-runs/answer`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['answerHeldRunsDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async answerHeldRuns(requestParameters: TeamsApiAnswerHeldRunsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<HeldRunsAnsweredDto> {
+        const response = await this.answerHeldRunsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -1153,6 +1207,43 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async importTeam(requestParameters: TeamsApiImportTeamRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamFileDto> {
         const response = await this.importTeamRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listHeldRunsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<HeldRunsDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/interrupted-runs`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listHeldRuns(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<HeldRunsDto> {
+        const response = await this.listHeldRunsRaw(initOverrides);
         return await response.value();
     }
 

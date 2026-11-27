@@ -8,6 +8,7 @@ import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { CapabilitiesController } from './controllers/capabilities.controller';
+import { HeldRunsController } from './controllers/held-runs.controller';
 import { ProjectChatController } from './controllers/project-chat.controller';
 import { ProjectInstructionSizesController } from './controllers/project-instruction-sizes.controller';
 import { TeamsController } from './controllers/teams.controller';
@@ -68,6 +69,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
     ProjectInstructionSizesController,
     ProjectChatController,
     ThreadMessageDeliveryController,
+    HeldRunsController,
   ],
   providers: [
     {

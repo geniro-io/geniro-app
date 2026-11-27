@@ -105,6 +105,18 @@ describe('ChatHeader', () => {
     ).toBeNull();
   });
 
+  it('says what a thread waiting on the user waits for, and only then', () => {
+    const el = render(
+      <ChatHeader {...baseProps} status="needs-input" awaiting="continue" />,
+    );
+    expect(el.textContent).toContain('needs more info');
+    expect(el.textContent).toContain('· waiting for you to continue it');
+    expect(
+      render(<ChatHeader {...baseProps} status="running" awaiting="continue" />)
+        .textContent,
+    ).not.toContain('waiting for you');
+  });
+
   it('shows the activity time once settled', () => {
     const el = render(<ChatHeader {...baseProps} status="completed" />);
     expect(el.textContent).toContain('1m');

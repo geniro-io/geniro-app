@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { InterruptCause } from '../../utils/stop-cause';
 import type { BrowserOutcome } from '../browser/browser.types';
 import type { ProjectInstructionBlock } from '../projects/projects.types';
 import type { Item } from '../runs/entity/item.entity';
@@ -8451,15 +8452,18 @@ export interface PersistedResetWake {
 }
 
 /**
- * The work a stop the app made on purpose cut off, kept on the run row
- * (`Run.restartContinuation`) from the boot that found it until the drain after
- * listen has continued it. Daemon-internal: never on the wire.
+ * The work a stop cut off, kept on the run row (`Run.restartContinuation`)
+ * from the boot that found it until the drain after listen has continued it —
+ * or, while `held`, until the user chose whether to continue it.
+ * Daemon-internal: never on the wire.
  */
 export interface RestartContinuation {
-  cause: 'self-update' | 'restart';
+  cause: InterruptCause;
+  /** Waits for the user's choice: never continued unattended. */
+  held: boolean;
   /** Own-conversation turns the stop cut off, each continued with a note. */
   turns: RestartContinuationTurn[];
-  /** Calls whose callee was working, each continued once under its own id. */
+  /** Calls whose callee was working, each continued under its own id. */
   calls: RestartContinuationCall[];
   /** Calls the boot closed failed instead, told to their caller in its continuation. */
   failedCalls: RestartContinuationFailedCall[];
@@ -8491,7 +8495,7 @@ export interface RestartContinuationFailedCall {
   callerMemberId: string;
   callerConversationId: string | null;
   calleeMemberId: string;
-  /** It had already been continued once after an earlier restart. */
+  /** It had already been continued once, and an update or a restart cut it off again. */
   again: boolean;
 }
 
@@ -9283,8 +9287,9 @@ export interface CallSeedRecord {
   contextTokens?: number;
   contextWindowTokens?: number;
   /**
-   * The daemon already continued this call once after an update or a restart
-   * cut it off (a `restartContinued` system row): a second stop fails it.
+   * The daemon already continued this call once after a stop cut it off (a
+   * `restartContinued` system row): an update or a restart cutting it off again
+   * fails it.
    */
   continuedAfterRestart?: true;
 }

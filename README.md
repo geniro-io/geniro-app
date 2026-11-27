@@ -534,7 +534,7 @@ Start [Ollama](https://ollama.com) on your Mac and download a model that support
 
 In **Settings → Remote access**, scan the QR code and enter the pairing code shown on your Mac. Your phone opens the same live chats, teams, board and projects over your Wi-Fi. For access away from home, **Get an address** starts the `cloudflared` or `ngrok` you already have installed and opens a tunnel from the Mac. The address appears only once the Mac has reached itself through it from the internet, so it opens on your phone the first time; if it does not answer within 5 minutes, the panel says which part failed and asks you to get a new address. On a network where the Mac cannot run that check, the address appears after about 30 seconds with a warning that it could not be verified.
 
-To stay quick on a phone, a long chat opens on its newest 250 items (scroll up for more), and everything the Mac sends is compressed. The row of chips above the message box scrolls sideways when it holds more than fits.
+To stay quick on a phone, a long chat opens on its newest 250 items (scroll up for more), and everything the Mac sends is compressed. The row of chips above the message box scrolls sideways when it holds more than fits. On a tablet or phone, when the chat is short — a tablet in landscape, or the manager's window — a question waiting on you stays in the conversation at its place instead of being pinned above the message box, so the whole chat scrolls; on the Mac it stays pinned. There, too, a page an agent published shows its top in the chat without a scroll of its own, fading out with **Open full screen** when it is longer, so a swipe over it scrolls the chat while taps on it still work.
 
 <table>
 <tr>

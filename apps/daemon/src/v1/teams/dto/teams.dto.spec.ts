@@ -1,10 +1,29 @@
 import { describe, expect, it } from 'vitest';
 
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '../../agents/chat.types';
-import { AnalysisRunsQuerySchema } from '../teams.types';
+import { AnalysisRunsQuerySchema, AnswerHeldRunsSchema } from '../teams.types';
 import { runTeamSchema } from './teams.dto';
 
 const IMAGE = { mediaType: 'image/png', data: 'aGk=' } as const;
+
+describe('AnswerHeldRunsSchema', () => {
+  it('takes both lists of run ids', () => {
+    expect(
+      AnswerHeldRunsSchema.parse({
+        continueRunIds: ['run-1'],
+        declineRunIds: [],
+      }),
+    ).toEqual({ continueRunIds: ['run-1'], declineRunIds: [] });
+  });
+
+  it.each([
+    [{ continueRunIds: ['run-1'] }],
+    [{ continueRunIds: [7], declineRunIds: [] }],
+    [{ continueRunIds: 'run-1', declineRunIds: [] }],
+  ])('refuses an answer that does not name two lists of ids: %j', (body) => {
+    expect(AnswerHeldRunsSchema.safeParse(body).success).toBe(false);
+  });
+});
 
 describe('AnalysisRunsQuerySchema', () => {
   it('reads the period from the query string, 1 to 365 whole days', () => {

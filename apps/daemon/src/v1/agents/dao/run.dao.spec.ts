@@ -66,6 +66,29 @@ describe('RunDao (in-memory sqlite)', () => {
     expect(run!.createdAt.toISOString()).toBe(old.toISOString());
   });
 
+  describe('clearChatRestartContinuations', () => {
+    it("forgets every chat's continuation record and keeps every team run's", async () => {
+      await dao.create({
+        id: 'chat-1',
+        teamId: null,
+        restartContinuation: '{"cause":"restart"}',
+      });
+      await dao.create({
+        id: 'team-1',
+        teamId: 'crew',
+        restartContinuation: '{"cause":"unknown","held":true}',
+      });
+
+      await dao.clearChatRestartContinuations();
+
+      const fresh = new RunDao(orm.em.fork());
+      expect((await fresh.getById('chat-1'))!.restartContinuation).toBeNull();
+      expect((await fresh.getById('team-1'))!.restartContinuation).toBe(
+        '{"cause":"unknown","held":true}',
+      );
+    });
+  });
+
   describe('existingIds', () => {
     it('answers the ids of the runs that still exist, archived ones included, and nothing for a run deleted or never made', async () => {
       await dao.create({ id: 'live-1', archivedAt: null });

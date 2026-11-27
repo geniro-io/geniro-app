@@ -173,6 +173,9 @@ export class RestartContinuationService implements OnModuleInit {
       return;
     }
     if (stored.held && !chosen) {
+      if (run.archivedAt !== null || run.status === 'cancelled') {
+        await this.runDao.setRestartContinuation(runId, null, em);
+      }
       return;
     }
     const record: RestartContinuation = { ...stored, held: false };

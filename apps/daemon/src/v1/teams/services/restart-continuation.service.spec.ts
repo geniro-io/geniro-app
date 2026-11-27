@@ -311,6 +311,13 @@ const HELD_RECORD: RestartContinuation = {
 };
 
 describe('RestartContinuationService with runs a crash cut off', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const heldRun = (id: string, extra: Partial<Run> = {}): Partial<Run> => ({
     id,
     teamId: 'crew',
@@ -328,6 +335,56 @@ describe('RestartContinuationService with runs a crash cut off', () => {
 
     expect(ctx.teams.continueAfterRestart).not.toHaveBeenCalled();
     expect(ctx.rows.get('team-1')!.restartContinuation).not.toBeNull();
+  });
+
+  it('forgets the held record of a run archived or stopped since, when it drains', async () => {
+    const ctx = setup([
+      heldRun('team-1', { archivedAt: new Date() }),
+      heldRun('team-2', { status: 'cancelled' }),
+      heldRun('team-3'),
+    ]);
+
+    await ctx.service.drain();
+
+    expect(ctx.rows.get('team-1')!.restartContinuation).toBeNull();
+    expect(ctx.rows.get('team-2')!.restartContinuation).toBeNull();
+    expect(ctx.rows.get('team-3')!.restartContinuation).not.toBeNull();
+    expect(ctx.teams.continueAfterRestart).not.toHaveBeenCalled();
+  });
+
+  it('retries a chosen run still settling a pass, without holding it again', async () => {
+    const ctx = setup([heldRun('team-1')]);
+    ctx.teams.continueAfterRestart
+      .mockResolvedValueOnce('busy')
+      .mockResolvedValueOnce('continued');
+
+    await ctx.service.answerHeld({
+      continueRunIds: ['team-1'],
+      declineRunIds: [],
+    });
+    expect(
+      JSON.parse(ctx.rows.get('team-1')!.restartContinuation!),
+    ).toMatchObject({ held: false });
+
+    await vi.advanceTimersByTimeAsync(RESTART_CONTINUE_RETRY_MS);
+
+    expect(ctx.teams.continueAfterRestart).toHaveBeenCalledTimes(2);
+    expect(ctx.rows.get('team-1')!.restartContinuation).toBeNull();
+  });
+
+  it('ends a chosen run whose continuation throws, as a stop nobody continues', async () => {
+    const ctx = setup([heldRun('team-1')]);
+    ctx.teams.continueAfterRestart.mockRejectedValue(new Error('no folder'));
+
+    await ctx.service.answerHeld({
+      continueRunIds: ['team-1'],
+      declineRunIds: [],
+    });
+
+    expect(ctx.teams.abandonRestartContinuation).toHaveBeenCalledWith(
+      'team-1',
+      'unknown',
+    );
   });
 
   it('lists only the held team runs that are neither archived nor stopped', async () => {
@@ -437,6 +494,8 @@ describe('RestartContinuationService with runs a crash cut off', () => {
       {
         id: 'team-3',
         teamId: 'crew',
+        status: 'running',
+        archivedAt: null,
         restartContinuation: JSON.stringify(TEAM_RECORD),
       },
       {

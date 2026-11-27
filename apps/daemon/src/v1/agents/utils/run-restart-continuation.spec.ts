@@ -74,33 +74,25 @@ describe('readRestartContinuation', () => {
     },
   );
 
-  it.each([
-    ['quit', false],
-    ['self-update', false],
-    ['restart', false],
-    ['crash', true],
-    ['unknown', true],
-  ] as const)(
-    'reads a record cut off by a %s as waiting for the user: %s',
-    (cause, held) => {
-      expect(
-        readRestartContinuation(
-          JSON.stringify({ cause, turns: [{ memberId: 'agent' }] }),
-        ),
-      ).toMatchObject({ cause, held });
+  it.each(['quit', 'self-update', 'restart', 'crash', 'unknown'] as const)(
+    'reads a record cut off by a %s with whether it waits for the user as written',
+    (cause) => {
+      for (const held of [true, false]) {
+        expect(
+          readRestartContinuation(
+            JSON.stringify({ cause, held, turns: [{ memberId: 'agent' }] }),
+          ),
+        ).toMatchObject({ cause, held });
+      }
     },
   );
 
-  it('keeps a record marked held waiting even under a cause that continues', () => {
+  it('reads a record that does not say it waits as one that does not', () => {
     expect(
       readRestartContinuation(
-        JSON.stringify({
-          cause: 'quit',
-          held: true,
-          turns: [{ memberId: 'agent' }],
-        }),
+        JSON.stringify({ cause: 'crash', turns: [{ memberId: 'agent' }] }),
       ),
-    ).toMatchObject({ cause: 'quit', held: true });
+    ).toMatchObject({ held: false });
   });
 
   it('reads a record that owes nothing as no record', () => {

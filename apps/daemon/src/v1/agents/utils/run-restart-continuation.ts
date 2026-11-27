@@ -2,7 +2,6 @@ import {
   type InterruptCause,
   interruptCauseClause,
   parseInterruptCause,
-  resumesUnattended,
 } from '../../../utils/stop-cause';
 import type {
   RestartContinuation,
@@ -40,7 +39,7 @@ export function readRestartContinuation(
   }
   const continuation: RestartContinuation = {
     cause,
-    held: asBoolean(record?.held) || !resumesUnattended(cause),
+    held: asBoolean(record?.held),
     turns: asArray(record?.turns).flatMap(readTurn),
     calls: asArray(record?.calls).flatMap(readCall),
     failedCalls: asArray(record?.failedCalls).flatMap(readFailedCall),

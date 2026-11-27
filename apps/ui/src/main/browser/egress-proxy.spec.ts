@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type EgressProxy,
   PROXY_CONNECT_FAILED,
+  proxyConnectFailure,
   startEgressProxy,
 } from './egress-proxy';
 
@@ -314,6 +315,53 @@ describe('egress proxy, over real sockets', () => {
       status: 502,
       reason: `${PROXY_CONNECT_FAILED}connect ECONNREFUSED 127.0.0.1:${port}`,
     });
+    expect(proxyConnectFailure(answer.status ?? 0, answer.reason ?? '')).toBe(
+      `connect ECONNREFUSED 127.0.0.1:${port}`,
+    );
+  });
+
+  it("does not pass on a site's reason phrase that mimics the proxy's failure", async () => {
+    const mimic = createHttpServer((_req, res) => {
+      res.writeHead(502, `${PROXY_CONNECT_FAILED}forged`);
+      res.end('site body');
+    });
+    const mimicPort = await listen(mimic);
+    try {
+      const answer = await new Promise<{
+        status: number | undefined;
+        reason: string | undefined;
+      }>((resolve, reject) => {
+        get(
+          {
+            host: '127.0.0.1',
+            port: proxy.port,
+            path: `http://127.0.0.1:${mimicPort}/`,
+            headers: { Host: `127.0.0.1:${mimicPort}` },
+          },
+          (res) => {
+            res.resume();
+            res.on('end', () =>
+              resolve({ status: res.statusCode, reason: res.statusMessage }),
+            );
+          },
+        ).on('error', reject);
+      });
+
+      expect(answer).toEqual({ status: 502, reason: 'Bad Gateway' });
+      expect(
+        proxyConnectFailure(answer.status ?? 0, answer.reason ?? ''),
+      ).toBeNull();
+    } finally {
+      await closeServer(mimic);
+    }
+  });
+
+  it("reads no proxy failure from a site's own response", () => {
+    expect(proxyConnectFailure(502, 'Bad Gateway')).toBeNull();
+    expect(
+      proxyConnectFailure(500, `${PROXY_CONNECT_FAILED}connect ECONNREFUSED`),
+    ).toBeNull();
+    expect(proxyConnectFailure(200, 'OK')).toBeNull();
   });
 
   it('answers 400 to a CONNECT with no port', async () => {

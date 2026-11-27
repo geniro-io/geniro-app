@@ -31,6 +31,7 @@ import {
   configureBrowserSession,
   ownCookiePartition,
 } from './browser-sessions';
+import { proxyConnectFailure } from './egress-proxy';
 
 const RECENT_LIMIT = 20;
 const SEARCH_URL = 'https://duckduckgo.com/?q=';
@@ -919,20 +920,34 @@ export class BrowserService {
     });
     contents.on('page-title-updated', refresh);
     contents.on('did-navigate-in-page', refresh);
-    contents.on('did-navigate', () => {
-      tab.refs.clear();
-      refresh();
-    });
+    contents.on(
+      'did-navigate',
+      (
+        _event: unknown,
+        url: string,
+        httpResponseCode: number,
+        httpStatusText: string,
+      ) => {
+        tab.refs.clear();
+        const cause = proxyConnectFailure(httpResponseCode, httpStatusText);
+        tab.error =
+          cause === null
+            ? null
+            : {
+                code: httpResponseCode,
+                description: cause,
+                url,
+                certificate: false,
+              };
+        refresh();
+      },
+    );
     contents.on('did-start-loading', () => {
       tab.loading = true;
       refresh();
     });
     contents.on('did-stop-loading', () => {
       tab.loading = false;
-      refresh();
-    });
-    contents.on('did-finish-load', () => {
-      tab.error = null;
       refresh();
     });
     contents.on(

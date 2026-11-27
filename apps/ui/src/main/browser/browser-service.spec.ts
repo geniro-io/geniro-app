@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type BrowserStateEvent, IPC } from '../../shared/contracts';
 import { AgentOp } from './browser-agent-op';
 import type * as browserSessionsModule from './browser-sessions';
+import { PROXY_CONNECT_FAILED } from './egress-proxy';
 
 interface FakeContents extends EventEmitter {
   url: string;
@@ -884,6 +885,95 @@ describe('BrowserService', () => {
     expect(contents.reload).toHaveBeenCalledTimes(2);
     expect(fromToolbar).toBeNull();
     expect(forAgent).toBeNull();
+  });
+
+  it('shows why a plain-http page the egress proxy could not reach did not load', async () => {
+    const { service } = makeService();
+    await service.openTab('run-1', 'http://127.0.0.1:59999/', {
+      openedBy: null,
+    });
+    const contents = h.views[0]?.webContents as FakeContents;
+
+    contents.emit(
+      'did-navigate',
+      {},
+      'http://127.0.0.1:59999/',
+      502,
+      `${PROXY_CONNECT_FAILED}connect ECONNREFUSED 127.0.0.1:59999`,
+    );
+    contents.emit('did-finish-load', {});
+    contents.emit('did-stop-loading', {});
+
+    expect(service.state('run-1').tabs[0]?.error).toEqual({
+      code: 502,
+      description: 'connect ECONNREFUSED 127.0.0.1:59999',
+      url: 'http://127.0.0.1:59999/',
+      certificate: false,
+    });
+  });
+
+  it.each([
+    [502, 'Bad Gateway'],
+    [500, 'Internal Server Error'],
+    [404, 'Not Found'],
+  ])("shows a site's own %i page as a page", async (status, reason) => {
+    const { service } = makeService();
+    await service.openTab('run-1', 'http://dev.test/', { openedBy: null });
+    const contents = h.views[0]?.webContents as FakeContents;
+
+    contents.emit('did-navigate', {}, 'http://dev.test/', status, reason);
+    contents.emit('did-finish-load', {});
+
+    expect(service.state('run-1').tabs[0]?.error).toBeNull();
+  });
+
+  it('clears an earlier proxy failure on the next commit', async () => {
+    const { service } = makeService();
+    await service.openTab('run-1', 'http://dev.test/', { openedBy: null });
+    const contents = h.views[0]?.webContents as FakeContents;
+
+    contents.emit(
+      'did-navigate',
+      {},
+      'http://dev.test/',
+      502,
+      `${PROXY_CONNECT_FAILED}getaddrinfo ENOTFOUND dev.test`,
+    );
+    contents.emit('did-finish-load', {});
+    const failed = service.state('run-1').tabs[0]?.error;
+    contents.emit('did-navigate', {}, 'http://dev.test/', 200, 'OK');
+
+    expect(failed?.description).toBe('getaddrinfo ENOTFOUND dev.test');
+    expect(service.state('run-1').tabs[0]?.error).toBeNull();
+  });
+
+  it("keeps a failed load's error after Chromium's error page finishes loading", async () => {
+    const { service } = makeService();
+    await service.openTab('run-1', 'https://127.0.0.1:59999/', {
+      openedBy: null,
+    });
+    const contents = h.views[0]?.webContents as FakeContents;
+
+    contents.emit(
+      'did-fail-load',
+      {},
+      -111,
+      'ERR_TUNNEL_CONNECTION_FAILED',
+      'https://127.0.0.1:59999/',
+      true,
+    );
+    contents.emit('did-finish-load', {});
+    contents.emit('did-stop-loading', {});
+    const afterErrorPage = service.state('run-1').tabs[0]?.error;
+    contents.emit('did-navigate', {}, 'https://one.test/', 200, 'OK');
+
+    expect(afterErrorPage).toEqual({
+      code: -111,
+      description: 'ERR_TUNNEL_CONNECTION_FAILED',
+      url: 'https://127.0.0.1:59999/',
+      certificate: false,
+    });
+    expect(service.state('run-1').tabs[0]?.error).toBeNull();
   });
 
   it('closes a tab and selects its neighbour', async () => {

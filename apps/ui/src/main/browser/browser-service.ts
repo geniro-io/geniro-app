@@ -818,10 +818,14 @@ export class BrowserService {
     win.on('restore', relayoutDriven);
   }
 
-  /** A view off every window paints only while it has a size: at 0×0 a capture waits forever for a frame. */
+  /**
+   * A view off every window paints only while it has a size: at 0×0 a capture waits forever for a frame.
+   * While the pane is measured it takes the pane's size, so its page is laid out for the area it will be shown in.
+   */
   private keepSized(chat: ChatBrowser, tab: BrowserTab): void {
+    const pane = chat.poppedOut ? chat.popoutBounds : chat.bounds;
     const { width, height } = tab.view.getBounds();
-    if (width > 0 && height > 0) {
+    if (pane === null && width > 0 && height > 0) {
       return;
     }
     const size = this.paneSize(chat);

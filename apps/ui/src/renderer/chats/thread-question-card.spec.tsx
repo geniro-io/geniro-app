@@ -12,7 +12,6 @@ import type { DaemonApis } from '../daemon-api';
 import type { RunStatusEvent } from '../daemon-client';
 import { ApprovalCard } from './approval-card';
 import { THREAD_QUESTION_CARD } from './geniro-tool';
-import { PAGE_UNAVAILABLE_TEXT } from './question-attachments';
 import {
   deliverRelayedImages,
   readThreadQuestionRelay,
@@ -407,7 +406,7 @@ describe('a thread question relayed into the manager chat', () => {
     );
   });
 
-  it('keeps the question answerable, with the unavailable note, when the thread’s page listing cannot be read', async () => {
+  it('keeps the question answerable, with the page marked unavailable, when the thread’s page listing cannot be read', async () => {
     const onRespond = vi.fn();
     const reader = stubThreadContextReader(() => Promise.resolve([]), {
       artifacts: () => Promise.reject(new Error('listing unreadable')),
@@ -439,7 +438,11 @@ describe('a thread question relayed into the manager chat', () => {
         setTimeout(resolve, 0);
       });
     });
-    expect(container.textContent).toContain(PAGE_UNAVAILABLE_TEXT);
+    const chip = container.querySelector(
+      '[data-slot="question-attachment-chip"]',
+    );
+    expect(chip?.getAttribute('data-state')).toBe('unavailable');
+    expect(chip?.getAttribute('aria-label')).toBe('Plan, unavailable');
     expect(container.querySelector('iframe')).toBeNull();
     const redis = [...container.querySelectorAll('button')].find((candidate) =>
       candidate.textContent?.startsWith('Redis'),
@@ -591,6 +594,58 @@ describe('a relayed question once settled', () => {
     expect(
       card().querySelectorAll('[data-slot="question-attachment-chip"]'),
     ).toHaveLength(0);
+  });
+
+  it('draws the pages of an open card as chips, never an embedded page, and opens one full screen on a press', async () => {
+    const reader = stubThreadContextReader(() => Promise.resolve([]), {
+      artifacts: () =>
+        Promise.resolve([
+          {
+            artifactId: 'plan',
+            version: 1,
+            title: 'Plan',
+            summary: null,
+            key: 'k',
+          },
+        ]),
+    });
+    await act(async () => {
+      root.render(
+        <ThreadContextReaderContext.Provider value={reader}>
+          <ApprovalCard
+            toolName={THREAD_QUESTION_CARD}
+            input={{
+              ...RELAYED_QUESTION,
+              attachments: [
+                {
+                  kind: 'artifact',
+                  artifactId: 'plan',
+                  title: 'Plan',
+                  version: 1,
+                },
+              ],
+              moreAttachments: 0,
+            }}
+            requestId="relay-1"
+            verdict={null}
+            onRespond={vi.fn()}
+          />
+        </ThreadContextReaderContext.Provider>,
+      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    const chip = card().querySelector<HTMLButtonElement>(
+      '[data-slot="question-attachment-chip"]',
+    );
+    expect(chip?.getAttribute('aria-label')).toBe('Plan');
+    expect(document.querySelector('iframe')).toBeNull();
+
+    act(() => chip!.click());
+    expect(
+      document.querySelector('iframe')?.closest('dialog, [role="dialog"]'),
+    ).not.toBeNull();
   });
 
   it('draws the pages of a card closed with no answer as chips, loading no page', async () => {

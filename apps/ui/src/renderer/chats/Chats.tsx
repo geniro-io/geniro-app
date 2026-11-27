@@ -79,6 +79,7 @@ import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
+import { useElementSize } from '../components/use-element-size';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { usePhoneBackEntry } from '../components/use-phone-back-entry';
@@ -280,6 +281,10 @@ import {
   artifactUrlBuilder,
 } from './published-artifact';
 import { questionAttachmentSetOf } from './question-attachments-payload';
+import {
+  placeOpenQuestions,
+  type QuestionPlacement,
+} from './question-placement';
 import { QueuedStrip } from './queued-strip';
 import { holdReadingPlace } from './reading-anchor';
 import type {
@@ -5234,6 +5239,11 @@ export function Chats({
    * live copy, because two sets of buttons over one one-shot verdict channel is
    * a race the card cannot win.
    *
+   * The exception is a short chat column (`questionPlacements`): there the
+   * pinned card would leave the conversation a strip it cannot scroll, so a
+   * question whose row is drawn keeps its live card at that row instead, and
+   * only that one copy exists.
+   *
    * Derived from the persisted items, so it survives a chat switch and a
    * reload the same way the transcript does.
    */
@@ -5241,15 +5251,6 @@ export function Chats({
     () => requestRows.filter((item) => openRequestId(item) !== null),
     [requestRows, openRequestId],
   );
-  /**
-   * The one shown: the NEWEST, which is what the turn is actually blocked on.
-   *
-   * The others stay MOUNTED and hidden rather than being unrendered, which is
-   * what keeps a half-typed answer alive when a newer question takes the pin.
-   * Unmounting resets the card's picks, its typed text and every staged
-   * attachment — and the user has no way to get any of it back.
-   */
-  const pinnedRequest = openRequests.at(-1) ?? null;
   /**
    * ONE card builder for both placements — the pinned slot and the settled
    * transcript row. The two differ only in WHERE they hang, and a second copy
@@ -6949,6 +6950,42 @@ export function Chats({
   useEffect(() => {
     drawnEntriesRef.current = transcriptEntries;
   }, [transcriptEntries]);
+  const [measureChatColumn, chatColumn] = useElementSize<HTMLElement>();
+  const questionPlacementsRef = useRef<ReadonlyMap<string, QuestionPlacement>>(
+    new Map(),
+  );
+  const questionPlacements = useMemo(() => {
+    const drawn = new Set<string>();
+    for (const entry of transcriptEntries) {
+      if (entry.type === 'item' && entry.item.kind === 'approval_request') {
+        drawn.add(entry.item.id);
+      }
+    }
+    const placed = placeOpenQuestions(
+      questionPlacementsRef.current,
+      openRequests.map((request) => request.id),
+      threadOpening ? null : drawn,
+      chatColumn.height,
+    );
+    questionPlacementsRef.current = placed;
+    return placed;
+  }, [openRequests, transcriptEntries, threadOpening, chatColumn.height]);
+  const pinnedRequests = useMemo(
+    () =>
+      openRequests.filter(
+        (request) => questionPlacements.get(request.id) !== 'feed',
+      ),
+    [openRequests, questionPlacements],
+  );
+  /**
+   * The one shown: the NEWEST, which is what the turn is actually blocked on.
+   *
+   * The others stay MOUNTED and hidden rather than being unrendered, which is
+   * what keeps a half-typed answer alive when a newer question takes the pin.
+   * Unmounting resets the card's picks, its typed text and every staged
+   * attachment — and the user has no way to get any of it back.
+   */
+  const pinnedRequest = pinnedRequests.at(-1) ?? null;
   // A freshly opened thread lands on its tail in the frame that first draws
   // it — a layout effect, so no frame is painted at the top of the page.
   // Instant, not smooth: animating a scroll the user never asked for, through
@@ -10841,7 +10878,9 @@ export function Chats({
                       </section>
                     </MenuAnchorContext.Provider>
                   ) : (
-                    <section className="flex min-h-0 flex-col">
+                    <section
+                      ref={measureChatColumn}
+                      className="flex min-h-0 flex-col">
                       {mobileBack}
                       {mobilePanelToggle}
                       {activeRun && hosted?.hideHeader !== true ? (
@@ -11187,8 +11226,12 @@ export function Chats({
                               // which is the failure the pin exists to end. Leaving the
                               // live card here too would put two sets of buttons over one
                               // one-shot verdict channel; leaving nothing would silently
-                              // drop a row out of the conversation's order.
-                              if (openRequestId(item) !== null) {
+                              // drop a row out of the conversation's order. A question
+                              // placed in the feed draws its one live card here instead.
+                              if (
+                                openRequestId(item) !== null &&
+                                questionPlacements.get(item.id) !== 'feed'
+                              ) {
                                 return wrap(
                                   <MessageBubble variant="note">
                                     {pinnedRequest?.id === item.id
@@ -11279,7 +11322,7 @@ export function Chats({
                   edge of the screen. */}
                           {pinnedRequest ? (
                             <PinnedRequests
-                              requests={openRequests}
+                              requests={pinnedRequests}
                               pinnedId={pinnedRequest.id}
                               renderCard={approvalCardFor}
                             />

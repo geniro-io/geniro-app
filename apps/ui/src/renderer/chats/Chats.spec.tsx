@@ -43,6 +43,7 @@ import { COMPOSER_MAX_LINES } from './composer-card';
 import { PARKED_SEND_TITLE } from './follow-up-delivery';
 import type { HostedThread } from './hosted-thread';
 import type { LiveTextEvent } from './live-text';
+import { PIN_QUESTION_MIN_COLUMN_PX } from './question-placement';
 import { RUN_LIST_PAGE } from './run-list-pages';
 import { FRAME_GESTURE_EVENT, TOUCH_SETTLE_MS } from './scroll-follow';
 import { forgetThread } from './thread-ui-memory';
@@ -17303,6 +17304,179 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
     expect(transcript(container).textContent).toContain(
       'the card is pinned below',
     );
+  });
+
+  describe('on a chat column shorter than the pin threshold', () => {
+    // jsdom lays nothing out, so the column height is handed to the chat
+    // screen's measure the way the browser would: through its ResizeObserver.
+    let columnHeight = 0;
+    const sized: { callback: ResizeObserverCallback; target: Element }[] = [];
+    class SizedResizeObserver {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element): void {
+        if (target.tagName !== 'SECTION') {
+          return;
+        }
+        sized.push({ callback: this.callback, target });
+        this.callback(
+          [{ contentRect: { width: 900, height: columnHeight } }] as never,
+          this,
+        );
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    const resize = (height: number): void => {
+      columnHeight = height;
+      act(() => {
+        for (const { callback } of sized) {
+          callback(
+            [{ contentRect: { width: 900, height } }] as never,
+            {} as never,
+          );
+        }
+      });
+    };
+    beforeEach(() => {
+      sized.length = 0;
+      vi.stubGlobal('ResizeObserver', SizedResizeObserver);
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+    const approveButtons = (root: HTMLElement): HTMLButtonElement[] =>
+      [...root.querySelectorAll('button')].filter(
+        (b) => b.textContent === 'Approve',
+      );
+
+    it('draws the open card at its own row in the feed, not pinned', async () => {
+      columnHeight = PIN_QUESTION_MIN_COLUMN_PX - 1;
+      api.listRunItems.mockResolvedValue([
+        msg(0, 'user', 'hi'),
+        approval('r1', 1, 'req-1'),
+      ]);
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      expect(pinned(container)).toBeNull();
+      expect(approveButtons(transcript(container))).toHaveLength(1);
+      expect(approveButtons(container)).toHaveLength(1);
+      expect(transcript(container).textContent).not.toContain(
+        'waiting on your answer',
+      );
+    });
+
+    it('pins the open card as before on a column at the threshold', async () => {
+      columnHeight = PIN_QUESTION_MIN_COLUMN_PX;
+      api.listRunItems.mockResolvedValue([
+        msg(0, 'user', 'hi'),
+        approval('r1', 1, 'req-1'),
+      ]);
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      expect(approveButtons(pinned(container)!)).toHaveLength(1);
+      expect(approveButtons(transcript(container))).toHaveLength(0);
+      expect(transcript(container).textContent).toContain(
+        'the card is pinned below',
+      );
+    });
+
+    it('still pins a question whose row is above the loaded window', async () => {
+      columnHeight = PIN_QUESTION_MIN_COLUMN_PX - 1;
+      api.readRunState.mockResolvedValue({
+        ...emptyRunState(),
+        openRequests: [approval('r1', 1, 'req-above')],
+      });
+      api.listRunItems.mockResolvedValue([msg(900, 'user', 'hi')]);
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      expect(approveButtons(pinned(container)!)).toHaveLength(1);
+    });
+
+    it('keeps a card in the feed when the column grows past the threshold', async () => {
+      columnHeight = PIN_QUESTION_MIN_COLUMN_PX - 1;
+      api.listRunItems.mockResolvedValue([
+        msg(0, 'user', 'hi'),
+        approval('r1', 1, 'req-1'),
+      ]);
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      const card = approveButtons(transcript(container))[0];
+
+      resize(PIN_QUESTION_MIN_COLUMN_PX + 400);
+
+      expect(pinned(container)).toBeNull();
+      expect(approveButtons(transcript(container))[0]).toBe(card);
+    });
+
+    it('keeps a pinned card pinned when the column shrinks past the threshold', async () => {
+      columnHeight = PIN_QUESTION_MIN_COLUMN_PX;
+      api.listRunItems.mockResolvedValue([
+        msg(0, 'user', 'hi'),
+        approval('r1', 1, 'req-1'),
+      ]);
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      const card = approveButtons(pinned(container)!)[0];
+
+      resize(PIN_QUESTION_MIN_COLUMN_PX - 100);
+
+      expect(approveButtons(pinned(container)!)[0]).toBe(card);
+      expect(approveButtons(transcript(container))).toHaveLength(0);
+    });
+
+    it('leaves a swipe up where it is while new rows arrive under a card in the feed', async () => {
+      columnHeight = PIN_QUESTION_MIN_COLUMN_PX - 1;
+      api.listRunItems.mockResolvedValue([
+        msg(0, 'user', 'hi'),
+        approval('r1', 1, 'req-1'),
+      ]);
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      const scroller = transcript(container);
+      expect(approveButtons(scroller)).toHaveLength(1);
+      Object.defineProperty(scroller, 'scrollHeight', {
+        value: 2_000,
+        configurable: true,
+      });
+      Object.defineProperty(scroller, 'clientHeight', {
+        value: 500,
+        configurable: true,
+      });
+      const scrollTo = vi.fn();
+      scroller.scrollTo = scrollTo;
+      scroller.scrollTop = 1_500;
+      await act(async () => {
+        scroller.dispatchEvent(new Event('scroll'));
+        await Promise.resolve();
+      });
+      await act(async () => {
+        emitItem(msg(2, 'assistant', 'still following'));
+      });
+      expect(scrollTo).toHaveBeenCalled();
+      scrollTo.mockClear();
+
+      scroller.dispatchEvent(new Event('touchstart'));
+      scroller.scrollTop = 1_400;
+      await act(async () => {
+        scroller.dispatchEvent(new Event('scroll'));
+        await Promise.resolve();
+      });
+      await act(async () => {
+        emitItem(msg(3, 'assistant', 'a row arriving mid-swipe'));
+      });
+
+      expect(scrollTo).not.toHaveBeenCalled();
+      expect(scroller.scrollTop).toBe(1_400);
+    });
   });
 
   it('bounds the pinned card to half the chat column and lets it scroll', async () => {

@@ -1,10 +1,7 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
-import {
-  type InterruptCause,
-  resumesUnattended,
-} from '../../../utils/stop-cause';
+import { resumesUnattended } from '../../../utils/stop-cause';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';

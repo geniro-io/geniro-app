@@ -35,14 +35,14 @@ afterEach(() => {
   container = null;
 });
 
-function render(node: React.ReactNode): HTMLDivElement {
+function render(node: React.ReactNode): HTMLElement {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
     root!.render(node);
   });
-  return container;
+  return document.body;
 }
 
 function button(el: HTMLElement, name: string): HTMLButtonElement {
@@ -1095,7 +1095,7 @@ type OnAction = NonNullable<
 function systemCard(
   onAction: OnAction,
   extra: Partial<React.ComponentProps<typeof RecommendationsCard>> = {},
-): HTMLDivElement {
+): HTMLElement {
   return render(
     <RecommendationsCard
       look={LOOK}

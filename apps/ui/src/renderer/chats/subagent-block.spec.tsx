@@ -141,6 +141,10 @@ function makeBlock({
 let container: HTMLDivElement;
 let root: Root;
 
+function dialogScope(): HTMLElement {
+  return document.querySelector<HTMLElement>('[role="dialog"]')!;
+}
+
 beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -820,13 +824,15 @@ describe('a delegate whose CLI streams none of its work', () => {
       ),
     );
 
-    expect(container.textContent).toContain(REASON);
-    expect(container.textContent).not.toContain('has not done anything yet');
+    expect(dialogScope().textContent).toContain(REASON);
+    expect(dialogScope().textContent).not.toContain(
+      'has not done anything yet',
+    );
     // Stated ONCE. It used to be printed under both a `Timeline` heading and a
     // `Conversation` one; neither heading exists any more.
-    expect(container.textContent).not.toContain('Timeline');
+    expect(dialogScope().textContent).not.toContain('Timeline');
     expect(
-      container.querySelectorAll('[data-role="subagent-steps-missing"]'),
+      dialogScope().querySelectorAll('[data-role="subagent-steps-missing"]'),
     ).toHaveLength(1);
   });
 
@@ -847,7 +853,7 @@ describe('a delegate whose CLI streams none of its work', () => {
       ),
     );
 
-    const ended = container.querySelector('[data-role="subagent-ended"]');
+    const ended = dialogScope().querySelector('[data-role="subagent-ended"]');
     expect(ended).not.toBeNull();
     // The block vocabulary's own word, so this line, the header glyph and the
     // panel row cannot spell one ending three ways.
@@ -891,7 +897,9 @@ describe('a delegate whose CLI streams none of its work', () => {
       ),
     );
 
-    expect(container.querySelector('[data-role="subagent-ended"]')).toBeNull();
+    expect(
+      dialogScope().querySelector('[data-role="subagent-ended"]'),
+    ).toBeNull();
   });
 
   it('withholds it from a delegate whose own work already shows the ending', () => {
@@ -906,7 +914,9 @@ describe('a delegate whose CLI streams none of its work', () => {
       ),
     );
 
-    expect(container.querySelector('[data-role="subagent-ended"]')).toBeNull();
+    expect(
+      dialogScope().querySelector('[data-role="subagent-ended"]'),
+    ).toBeNull();
   });
 
   it('states the model and the duration, the only substance the CLI gives', () => {
@@ -918,12 +928,12 @@ describe('a delegate whose CLI streams none of its work', () => {
       ),
     );
 
-    const facts = container.querySelector('[data-role="subagent-facts"]');
+    const facts = dialogScope().querySelector('[data-role="subagent-facts"]');
     expect(facts?.textContent).toContain('claude-opus-5-thinking-high');
     expect(facts?.textContent).toContain('took 13s');
     // And the brief it was given, which is the other thing only this channel
     // carries — the launching tool call's own arguments never held it.
-    expect(container.textContent).toContain(
+    expect(dialogScope().textContent).toContain(
       'list every file in the workspace root',
     );
   });
@@ -948,7 +958,7 @@ describe('a delegate whose CLI streams none of its work', () => {
       ),
     );
 
-    expect(container.textContent).toContain('has not done anything yet');
+    expect(dialogScope().textContent).toContain('has not done anything yet');
   });
 
   /**
@@ -1015,13 +1025,13 @@ describe('a delegate whose CLI streams none of its work', () => {
       ),
     );
 
-    expect(container.textContent).not.toContain('Result from');
-    expect(container.textContent).toContain('Reply to the launching call');
+    expect(dialogScope().textContent).not.toContain('Result from');
+    expect(dialogScope().textContent).toContain('Reply to the launching call');
     // …and the line explaining the empty thread is BACK. It was suppressed by
     // `returned`, which an acknowledgement sets a second after the launch — so
     // it went missing on exactly the delegates whose thread is empty for that
     // reason.
-    expect(container.textContent).toContain('has not done anything yet');
+    expect(dialogScope().textContent).toContain('has not done anything yet');
   });
 
   it('still calls it an acknowledgement once the delegate has spoken', () => {
@@ -1041,9 +1051,9 @@ describe('a delegate whose CLI streams none of its work', () => {
       ),
     );
 
-    expect(container.textContent).toContain('looking now');
-    expect(container.textContent).toContain('Reply to the launching call');
-    expect(container.textContent).not.toContain('Result from');
+    expect(dialogScope().textContent).toContain('looking now');
+    expect(dialogScope().textContent).toContain('Reply to the launching call');
+    expect(dialogScope().textContent).not.toContain('Result from');
   });
 
   it('does not pass a RESUME receipt off as a delegate’s result either', () => {
@@ -1090,8 +1100,8 @@ describe('a delegate whose CLI streams none of its work', () => {
       ),
     );
 
-    expect(container.textContent).not.toContain('Result from');
-    expect(container.textContent).toContain('Reply to the launching call');
+    expect(dialogScope().textContent).not.toContain('Result from');
+    expect(dialogScope().textContent).toContain('Reply to the launching call');
   });
 
   it('withholds the generic line from a delegate that RETURNED with no thread', () => {
@@ -1109,8 +1119,12 @@ describe('a delegate whose CLI streams none of its work', () => {
       ),
     );
 
-    expect(container.textContent).toContain('Found one off-by-one in parse().');
-    expect(container.textContent).not.toContain('has not done anything yet');
+    expect(dialogScope().textContent).toContain(
+      'Found one off-by-one in parse().',
+    );
+    expect(dialogScope().textContent).not.toContain(
+      'has not done anything yet',
+    );
   });
 
   it('renders no facts line at all when the CLI named neither', () => {
@@ -1124,7 +1138,9 @@ describe('a delegate whose CLI streams none of its work', () => {
       ),
     );
 
-    expect(container.querySelector('[data-role="subagent-facts"]')).toBeNull();
+    expect(
+      dialogScope().querySelector('[data-role="subagent-facts"]'),
+    ).toBeNull();
   });
 
   it('shows the reason inline too, without opening the dialog', () => {
@@ -1165,8 +1181,10 @@ describe('SubagentDetail', () => {
   it('is the conversation, open — and needs no expanding', () => {
     // The dialog was opened to READ the thread, unlike the inline block.
     openDetail();
-    expect(container.textContent).toContain('reading the diff now');
-    expect(container.textContent).toContain('Found one off-by-one in parse().');
+    expect(dialogScope().textContent).toContain('reading the diff now');
+    expect(dialogScope().textContent).toContain(
+      'Found one off-by-one in parse().',
+    );
   });
 
   it('carries no timeline — the messages ARE the record of what it did', () => {
@@ -1175,14 +1193,14 @@ describe('SubagentDetail', () => {
     // opened the dialog for.
     openDetail();
     expect(
-      container.querySelector('[data-role="subagent-timeline"]'),
+      dialogScope().querySelector('[data-role="subagent-timeline"]'),
     ).toBeNull();
-    expect(container.textContent).not.toContain('Timeline');
+    expect(dialogScope().textContent).not.toContain('Timeline');
   });
 
   it('heads its one section with nothing — the dialog title already names it', () => {
     openDetail();
-    expect(container.textContent).not.toContain('Conversation');
+    expect(dialogScope().textContent).not.toContain('Conversation');
   });
 
   it('says how many of its calls the panel holds, as the card does', () => {
@@ -1198,7 +1216,7 @@ describe('SubagentDetail', () => {
     );
 
     expect(
-      container.querySelector('[data-slot="subagent-window-note"]')
+      dialogScope().querySelector('[data-slot="subagent-window-note"]')
         ?.textContent,
     ).toBe('Showing the last 1 of 412 tool calls');
   });

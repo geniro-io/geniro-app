@@ -4,8 +4,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { stubCssZoom } from '../../__tests__/stub-css-zoom';
+import { afterPopstate } from '../../__tests__/after-popstate';
+import { stubTopLayer } from '../../__tests__/stub-top-layer';
 import { Dialog } from './dialog';
+import { Popover } from './popover';
 import { Select } from './select';
 
 (
@@ -16,6 +18,9 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  // jsdom keeps one history across the file: start each case on an entry no
+  // earlier full-screen dialog marked, or it would be adopted.
+  history.replaceState(null, '');
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -24,6 +29,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
 });
 
 function renderDialog(open: boolean, onClose = vi.fn()): void {
@@ -52,24 +58,54 @@ function pressTab(shiftKey = false): void {
   });
 }
 
-describe('Dialog under a CSS zoom', () => {
-  it('undoes the zoom above it, so a dialog opened inside a scaled card is full size', () => {
-    const restore = stubCssZoom(0.5);
-    try {
-      renderDialog(true);
-      expect(
-        document.querySelector<HTMLElement>('[role="dialog"]')!.style.zoom,
-      ).toBe('2');
-    } finally {
-      restore();
-    }
+describe('Dialog — portal', () => {
+  it('renders its overlay straight into the body, out of a clipping, zoomed parent', () => {
+    container.style.overflow = 'hidden';
+    container.style.zoom = '0.5';
+    renderDialog(true);
+
+    const overlay = document.querySelector('[role="dialog"]')!;
+    expect(overlay.parentElement).toBe(document.body);
+    expect(container.contains(overlay)).toBe(false);
   });
 
-  it('adds no zoom where nothing above it is zoomed', () => {
-    renderDialog(true);
-    expect(
-      document.querySelector<HTMLElement>('[role="dialog"]')!.style.zoom,
-    ).toBe('');
+  it('shows itself in the top layer above a viewport popover it was opened from', () => {
+    const topLayer = stubTopLayer();
+    try {
+      function FromPopover({ dialog }: { dialog: boolean }): React.JSX.Element {
+        const trigger = React.useRef<HTMLButtonElement>(null);
+        return (
+          <>
+            <button type="button" ref={trigger}>
+              Answer
+            </button>
+            <Popover
+              open
+              onClose={vi.fn()}
+              triggerRef={trigger}
+              anchor="viewport"
+              label="Answer">
+              <Dialog open={dialog} onClose={vi.fn()} fullScreen title="Page">
+                body
+              </Dialog>
+            </Popover>
+          </>
+        );
+      }
+      act(() => {
+        root.render(<FromPopover dialog={false} />);
+      });
+      act(() => {
+        root.render(<FromPopover dialog />);
+      });
+
+      const panel = document.querySelector('[data-slot="popover-panel"]');
+      const overlay = document.querySelector('[aria-modal="true"]');
+      expect(topLayer.shown).toContain(panel);
+      expect(topLayer.shown.at(-1)).toBe(overlay);
+    } finally {
+      topLayer.restore();
+    }
   });
 });
 
@@ -100,7 +136,9 @@ describe('Dialog focus management', () => {
 
   it('traps Tab inside the card in both directions', () => {
     renderDialog(true);
-    const buttons = [...container.querySelectorAll('button')];
+    const buttons = [
+      ...document.querySelectorAll('[role="dialog"] button'),
+    ] as HTMLButtonElement[];
     const close = buttons.find(
       (b) => b.getAttribute('aria-label') === 'Close',
     )!;
@@ -322,7 +360,8 @@ describe('Dialog — dismissible={false}', () => {
   it('shows no corner ✕', () => {
     renderFixed(vi.fn());
 
-    expect(container.querySelector('[aria-label="Close"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Close"]')).toBeNull();
   });
 
   it('ignores Escape', () => {
@@ -375,7 +414,7 @@ describe('Dialog — dismissible={false}', () => {
     renderFixed(onClose, true);
 
     act(() =>
-      container
+      document
         .querySelector<HTMLButtonElement>('[aria-label="Close"]')!
         .click(),
     );
@@ -475,5 +514,177 @@ describe('Dialog — pickers inside the scrolling body', () => {
     // Still the scrolling body, only without the padding.
     expect(bodyOf().className).toContain('overflow-y-auto');
     expect(bodyOf().className).not.toContain('px-5');
+  });
+});
+
+/**
+ * A full-screen dialog covers the whole app, so it must always offer a way out:
+ * a ✕ big enough for a finger inside the safe area, Escape, and the platform's
+ * Back through a history entry it holds while open.
+ */
+describe('Dialog — full screen', () => {
+  function Viewer({
+    onClose,
+    fullScreen = true,
+    dismissible = true,
+  }: {
+    onClose: () => void;
+    fullScreen?: boolean;
+    dismissible?: boolean;
+  }): React.JSX.Element {
+    const [open, setOpen] = React.useState(true);
+    return (
+      <Dialog
+        open={open}
+        fullScreen={fullScreen}
+        dismissible={dismissible}
+        title="Plan"
+        onClose={() => {
+          onClose();
+          setOpen(false);
+        }}>
+        <p>Page</p>
+      </Dialog>
+    );
+  }
+
+  /** Renders, then lets the deferred history push run. */
+  async function renderViewer(
+    props: Parameters<typeof Viewer>[0],
+  ): Promise<void> {
+    await act(async () => {
+      root.render(<Viewer {...props} />);
+    });
+  }
+
+  const closeButton = (): HTMLButtonElement =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Close"]')!;
+  const overlay = (): HTMLElement | null =>
+    document.querySelector<HTMLElement>('[role="dialog"]');
+
+  it('gives the ✕ a 44px hit area and pads the header by the safe area', async () => {
+    await renderViewer({ onClose: vi.fn() });
+
+    expect(closeButton().className).toContain('size-11');
+    expect(closeButton().parentElement!.className).toContain(
+      'env(safe-area-inset-top)',
+    );
+    expect(closeButton().parentElement!.className).toContain(
+      'env(safe-area-inset-right)',
+    );
+    expect(overlay()!.className).toContain('h-dvh');
+  });
+
+  it('keeps a card dialog’s ✕ and header as they were', async () => {
+    await renderViewer({ onClose: vi.fn(), fullScreen: false });
+
+    expect(closeButton().className).toContain('size-7');
+    expect(closeButton().parentElement!.className).toContain('py-3.5');
+    expect(overlay()!.className).not.toContain('h-dvh');
+  });
+
+  it('pushes one history entry while open', async () => {
+    const push = vi.spyOn(history, 'pushState');
+    await renderViewer({ onClose: vi.fn() });
+
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it('pushes none for a card dialog or one the user must answer', async () => {
+    const push = vi.spyOn(history, 'pushState');
+    await renderViewer({ onClose: vi.fn(), fullScreen: false });
+    await act(async () => {
+      root.render(<></>);
+    });
+    await renderViewer({ onClose: vi.fn(), dismissible: false });
+
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it('closes on the platform’s Back', async () => {
+    const onClose = vi.fn();
+    await renderViewer({ onClose });
+
+    await afterPopstate(() => history.back(), 'the platform back');
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(overlay()).toBeNull();
+  });
+
+  it('pops its entry exactly once when the ✕ is pressed, even twice', async () => {
+    const onClose = vi.fn();
+    await renderViewer({ onClose });
+    const back = vi.spyOn(history, 'back');
+
+    await afterPopstate(() => {
+      closeButton().click();
+      closeButton().click();
+    }, 'the ✕');
+
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(overlay()).toBeNull();
+  });
+
+  it('pops its entry when Escape closes it', async () => {
+    const onClose = vi.fn();
+    await renderViewer({ onClose });
+    const back = vi.spyOn(history, 'back');
+
+    await afterPopstate(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    }, 'Escape');
+
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('pops its entry when a backdrop click closes it', async () => {
+    const onClose = vi.fn();
+    await renderViewer({ onClose });
+    const back = vi.spyOn(history, 'back');
+
+    await afterPopstate(() => overlay()!.click(), 'the backdrop');
+
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes only the top one of two stacked full-screen dialogs on Back', async () => {
+    const closeOuter = vi.fn();
+    const closeInner = vi.fn();
+    function Stacked({ inner }: { inner: boolean }): React.JSX.Element {
+      return (
+        <Dialog open fullScreen onClose={closeOuter} title="Changes">
+          <Dialog open={inner} fullScreen onClose={closeInner} title="Page">
+            body
+          </Dialog>
+        </Dialog>
+      );
+    }
+    await act(async () => {
+      root.render(<Stacked inner={false} />);
+    });
+    await act(async () => {
+      root.render(<Stacked inner />);
+    });
+
+    await afterPopstate(() => history.back(), 'the platform back');
+
+    expect(closeInner).toHaveBeenCalledTimes(1);
+    expect(closeOuter).not.toHaveBeenCalled();
+  });
+
+  it('closes a card dialog on the ✕ at once, with no trip through history', async () => {
+    const onClose = vi.fn();
+    await renderViewer({ onClose, fullScreen: false });
+    const back = vi.spyOn(history, 'back');
+
+    act(() => closeButton().click());
+
+    expect(back).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

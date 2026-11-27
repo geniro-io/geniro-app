@@ -698,7 +698,7 @@ async function openThreadNotes(
   await act(async () => {
     button?.click();
   });
-  return container.querySelector<HTMLTextAreaElement>(
+  return document.querySelector<HTMLTextAreaElement>(
     '[role="dialog"] textarea[aria-label="Thread notes"]',
   )!;
 }
@@ -1386,7 +1386,7 @@ describe('Chats — searching one conversation', () => {
         )
         ?.click();
     });
-    const field = container.querySelector<HTMLInputElement>(
+    const field = document.querySelector<HTMLInputElement>(
       'input[aria-label="Search this conversation"]',
     )!;
     await act(async () => {
@@ -1397,7 +1397,7 @@ describe('Chats — searching one conversation', () => {
       await vi.advanceTimersByTimeAsync(400);
     });
     return [
-      ...container.querySelectorAll<HTMLButtonElement>(
+      ...document.querySelectorAll<HTMLButtonElement>(
         '[data-slot="search-snippet"]',
       ),
     ].map((snippet) => snippet.closest('button')!);
@@ -5913,7 +5913,7 @@ describe('Chats team runs', () => {
       });
       await act(async () => {
         typeInto(
-          container.querySelector<HTMLInputElement>(
+          document.querySelector<HTMLInputElement>(
             'input[aria-label="Search this conversation"]',
           )!,
           'hidden',
@@ -5922,7 +5922,7 @@ describe('Chats team runs', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400);
       });
-      const result = container
+      const result = document
         .querySelector('[data-slot="search-snippet"]')!
         .closest('button')!;
       await act(async () => {
@@ -13390,7 +13390,7 @@ describe('Chats sidebar list', () => {
       pencil.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     // The field is in the row itself; no modal is opened over the list.
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     const input = container.querySelector<HTMLInputElement>(
       'aside li input[aria-label="Rename My chat"]',
     )!;
@@ -13600,7 +13600,7 @@ describe('Chats sidebar list', () => {
       );
 
       await act(async () => {
-        container
+        document
           .querySelector<HTMLButtonElement>(
             '[role="dialog"] button[aria-label="Close"]',
           )
@@ -13610,7 +13610,7 @@ describe('Chats sidebar list', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(PROCESS_POLL_MS * 3);
       });
-      expect(container.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
       expect(api.readRunProcesses).toHaveBeenCalledTimes(reads);
     } finally {
       vi.useRealTimers();
@@ -13713,7 +13713,7 @@ describe('Chats sidebar list', () => {
     });
     await act(async () => {
       [
-        ...container.querySelectorAll<HTMLButtonElement>(
+        ...document.querySelectorAll<HTMLButtonElement>(
           '[role="dialog"] button',
         ),
       ]
@@ -14016,7 +14016,7 @@ describe('Chats sidebar list', () => {
       );
     });
 
-    const dialog = container.querySelector('[role="dialog"]')!;
+    const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain('My chat');
     expect(dialog.textContent).toContain('nothing is deleted');
     expect(dialog.textContent).not.toContain('Still running');
@@ -14071,8 +14071,8 @@ describe('Chats sidebar list', () => {
       return container;
     }
 
-    function boxOf(container: HTMLElement): HTMLInputElement | null {
-      return container.querySelector<HTMLInputElement>(
+    function boxOf(): HTMLInputElement | null {
+      return document.querySelector<HTMLInputElement>(
         '[role="dialog"] input[type="checkbox"]',
       );
     }
@@ -14080,7 +14080,7 @@ describe('Chats sidebar list', () => {
     async function press(container: HTMLElement, label: string) {
       await act(async () => {
         [
-          ...container.querySelectorAll<HTMLButtonElement>(
+          ...document.querySelectorAll<HTMLButtonElement>(
             '[role="dialog"] button',
           ),
         ]
@@ -14111,12 +14111,12 @@ describe('Chats sidebar list', () => {
       const container = await openArchiveDialog();
 
       expect(lessonsApi.estimateLessons).toHaveBeenCalledWith({ runId: 'r1' });
-      expect(boxOf(container)!.checked).toBe(true);
-      const text = container.querySelector('[role="dialog"]')!.textContent;
+      expect(boxOf()!.checked).toBe(true);
+      const text = document.querySelector('[role="dialog"]')!.textContent;
       expect(text).toContain('Usually ~$0.13 and ~2m on Haiku 5.5');
       expect(text).not.toContain('$0.50');
       expect(
-        container
+        document
           .querySelector('[data-slot="archive-extract-lessons"]')!
           .getAttribute('title'),
       ).toContain('a background agent (Haiku 5.5) reads the thread');
@@ -14134,7 +14134,7 @@ describe('Chats sidebar list', () => {
       const container = await openArchiveDialog();
 
       await act(async () => {
-        boxOf(container)!.click();
+        boxOf()!.click();
       });
       await press(container, 'Archive');
 
@@ -14151,10 +14151,10 @@ describe('Chats sidebar list', () => {
         typical: null,
       });
       const container = await openArchiveDialog();
-      expect(boxOf(container)!.checked).toBe(false);
+      expect(boxOf()!.checked).toBe(false);
 
       await act(async () => {
-        boxOf(container)!.click();
+        boxOf()!.click();
       });
       await press(container, 'Archive');
 
@@ -14175,10 +14175,10 @@ describe('Chats sidebar list', () => {
           usd: 0.27,
         },
       });
-      const container = await openArchiveDialog();
+      await openArchiveDialog();
 
       expect(
-        container
+        document
           .querySelector('[data-slot="archive-extract-lessons"]')!
           .getAttribute('title'),
       ).toContain('A second model checks each lesson it finds.');
@@ -14186,7 +14186,7 @@ describe('Chats sidebar list', () => {
 
     it('shows no box and leaves the choice to the settings when the thread has nothing to learn from', async () => {
       const container = await openArchiveDialog();
-      expect(boxOf(container)).toBeNull();
+      expect(boxOf()).toBeNull();
 
       await press(container, 'Archive');
 
@@ -14201,9 +14201,9 @@ describe('Chats sidebar list', () => {
       lessonsApi.estimateLessons.mockResolvedValue(WITH_SIGNALS);
       const container = await openArchiveDialog();
       await act(async () => {
-        boxOf(container)!.click();
+        boxOf()!.click();
       });
-      expect(boxOf(container)!.checked).toBe(false);
+      expect(boxOf()!.checked).toBe(false);
       await press(container, 'Cancel');
 
       await act(async () => {
@@ -14212,7 +14212,7 @@ describe('Chats sidebar list', () => {
         );
       });
 
-      expect(boxOf(container)!.checked).toBe(true);
+      expect(boxOf()!.checked).toBe(true);
       expect(api.archiveChat).not.toHaveBeenCalled();
     });
   });
@@ -14230,7 +14230,7 @@ describe('Chats sidebar list', () => {
       );
     });
 
-    const dialog = container.querySelector('[role="dialog"]')!;
+    const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain('My chat');
     expect(
       [
@@ -14411,7 +14411,7 @@ describe('Chats sidebar list', () => {
     });
     await act(async () => {
       [
-        ...container.querySelectorAll<HTMLButtonElement>(
+        ...document.querySelectorAll<HTMLButtonElement>(
           '[role="dialog"] button',
         ),
       ]
@@ -14419,7 +14419,7 @@ describe('Chats sidebar list', () => {
         .click();
     });
 
-    const dialog = container.querySelector('[role="dialog"]')!;
+    const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain('daemon archive failed');
     expect(
       [
@@ -14567,7 +14567,7 @@ describe('Chats sidebar list', () => {
 
     await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
     // Irreversible: the row action asks before it destroys anything.
-    const dialog = container.querySelector('[role="dialog"]')!;
+    const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain('My chat');
     expect(api.deleteChat).not.toHaveBeenCalled();
 
@@ -14601,7 +14601,7 @@ describe('Chats sidebar list', () => {
     const container = await mountArchived(client);
 
     await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
-    const dialog = container.querySelector('[role="dialog"]')!;
+    const dialog = document.querySelector('[role="dialog"]')!;
 
     expect(dialog.querySelector('input[type="checkbox"]')).toBeNull();
     expect(lessonsApi.estimateLessons).not.toHaveBeenCalled();
@@ -14734,7 +14734,7 @@ describe('Chats sidebar list', () => {
     const container = await mountArchived(client);
 
     await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
-    const dialog = container.querySelector('[role="dialog"]')!;
+    const dialog = document.querySelector('[role="dialog"]')!;
     await act(async () => {
       [...dialog.querySelectorAll('button')]
         .find((b) => b.textContent === 'Delete')!
@@ -14742,7 +14742,7 @@ describe('Chats sidebar list', () => {
     });
 
     // The dialog closed and the row went, with no error shown.
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(
       [
         ...container.querySelectorAll<HTMLElement>(
@@ -14782,7 +14782,7 @@ describe('Chats sidebar list', () => {
     await pickScope(container, 'Archived only');
 
     await clickRowMenu(container, 'Unarchive Call Demo', 'Delete permanently');
-    const dialog = container.querySelector('[role="dialog"]')!;
+    const dialog = document.querySelector('[role="dialog"]')!;
     // The team ITSELF is not what is being deleted — say so on the card.
     expect(dialog.textContent).toContain('stays in your library');
 
@@ -14815,7 +14815,7 @@ describe('Chats sidebar list', () => {
     await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
     await act(async () => {
       [
-        ...container.querySelectorAll<HTMLButtonElement>(
+        ...document.querySelectorAll<HTMLButtonElement>(
           '[role="dialog"] button',
         ),
       ]
@@ -14864,14 +14864,14 @@ describe('Chats sidebar list', () => {
     await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
     await act(async () => {
       [
-        ...container.querySelectorAll<HTMLButtonElement>(
+        ...document.querySelectorAll<HTMLButtonElement>(
           '[role="dialog"] button',
         ),
       ]
         .find((b) => b.textContent === 'Delete')!
         .click();
     });
-    const dialog = container.querySelector('[role="dialog"]')!;
+    const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain('daemon DELETE failed');
     expect(
       [
@@ -15994,7 +15994,7 @@ describe('Chats error strip', () => {
     // as the sidebar's own delete — it does not fire the request itself.
     expect(teamApi.deleteTeamRun).not.toHaveBeenCalled();
     const confirm = [
-      ...container.querySelectorAll<HTMLButtonElement>('button'),
+      ...document.querySelectorAll<HTMLButtonElement>('button'),
     ].find((button) => button.textContent === 'Delete');
     await act(async () => {
       confirm?.click();
@@ -16061,7 +16061,7 @@ describe('Chats — the composer’s context readout', () => {
 
     // The inline box, not a `bottom-full` utility: the readout is anchored to
     // the viewport now, so which EDGE it is pinned by is the direction.
-    const panel = container.querySelector<HTMLElement>('[role="dialog"]');
+    const panel = document.querySelector<HTMLElement>('[role="dialog"]');
     expect(panel?.style.position).toBe('fixed');
     expect(panel?.style.bottom).not.toBe('');
     expect(panel?.style.top).toBe('');
@@ -16110,12 +16110,12 @@ describe('Chats — signing a server in', () => {
     });
     // The signed-out rows are folded under their own disclosure.
     const group = [
-      ...container.querySelectorAll<HTMLButtonElement>('button'),
+      ...document.querySelectorAll<HTMLButtonElement>('button'),
     ].find((button) => button.textContent?.includes('Needs sign-in'));
     await act(async () => {
       group!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    return [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+    return [...document.querySelectorAll<HTMLButtonElement>('button')].find(
       (button) => button.textContent?.trim() === 'Sign in',
     )!;
   }
@@ -16309,7 +16309,7 @@ describe('Chats — signing a server in', () => {
     // the middle of the flow and not its end. Without that the next assertion
     // would also pass on a dialog that had simply closed.
     expect(
-      container.querySelector('[data-slot="cli-login-progress"]'),
+      document.querySelector('[data-slot="cli-login-progress"]'),
     ).not.toBeNull();
     // Whether the row hides the button or disables it is the row's business;
     // what must not exist is a PRESSABLE one, since pressing is what opens the
@@ -16355,7 +16355,7 @@ describe('Chats — signing a server in', () => {
     });
 
     expect(
-      container.querySelector('[data-slot="cli-login-progress"]'),
+      document.querySelector('[data-slot="cli-login-progress"]'),
     ).toBeNull();
   });
 
@@ -16380,7 +16380,7 @@ describe('Chats — signing a server in', () => {
     // browser tab opens behind the app, so a button with no panel behind it
     // reads as one that did nothing.
     expect(
-      container.querySelector('[data-slot="cli-login-progress"]'),
+      document.querySelector('[data-slot="cli-login-progress"]'),
     ).not.toBeNull();
   });
 
@@ -16415,7 +16415,7 @@ describe('Chats — signing a server in', () => {
     expect(agentsApi.listAgentMcpServers.mock.calls.length).toBe(listedBefore);
     // Still mid-flow: `verifying` is not over, so the panel stays up.
     expect(
-      container.querySelector('[data-slot="cli-login-progress"]'),
+      document.querySelector('[data-slot="cli-login-progress"]'),
     ).not.toBeNull();
   });
 
@@ -16523,7 +16523,7 @@ describe('Chats — signing the CLI itself back in from a failed turn', () => {
     // used to supply: the browser tab opens behind the app, so a press with no
     // panel behind it reads as one that did nothing.
     expect(
-      container.querySelector('[data-slot="cli-login-progress"]'),
+      document.querySelector('[data-slot="cli-login-progress"]'),
     ).not.toBeNull();
   });
 
@@ -19190,7 +19190,7 @@ describe('Chats — background sub-agents', () => {
         ?.click();
     });
 
-    const title = container.querySelector(
+    const title = document.querySelector(
       '[role="dialog"] .text-sm.font-semibold',
     )?.textContent;
     expect(title).toBe('Sub-agent task-1');
@@ -19219,7 +19219,7 @@ describe('Chats — background sub-agents', () => {
         ?.click();
     });
 
-    const dialog = container.querySelector('[role="dialog"]');
+    const dialog = document.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
     expect(dialog?.textContent).toContain('Sub-agent · Review the diff');
     expect(dialog?.textContent).toContain('reading the diff now');
@@ -19229,7 +19229,7 @@ describe('Chats — background sub-agents', () => {
     await act(async () => {
       emitItem(delegated(3, 'found the off-by-one'));
     });
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain(
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
       'found the off-by-one',
     );
   });
@@ -20562,7 +20562,7 @@ describe('Chats — the archive filter does not hide a thread from its notificat
     });
     await act(async () => {
       [
-        ...container.querySelectorAll<HTMLButtonElement>(
+        ...document.querySelectorAll<HTMLButtonElement>(
           '[role="dialog"] button',
         ),
       ]
@@ -22307,9 +22307,9 @@ describe('Chats — searching every chat', () => {
   }
 
   /** Open the dialog with the shortcut, search, and press the first hit. */
-  async function pickHit(container: HTMLElement): Promise<void> {
+  async function pickHit(): Promise<void> {
     await pressShortcut();
-    const field = container.querySelector<HTMLInputElement>(
+    const field = document.querySelector<HTMLInputElement>(
       'input[aria-label="Search all chats"]',
     )!;
     await act(async () => {
@@ -22319,7 +22319,7 @@ describe('Chats — searching every chat', () => {
       await vi.advanceTimersByTimeAsync(400);
     });
     const hit = [
-      ...container.querySelectorAll<HTMLButtonElement>('button'),
+      ...document.querySelectorAll<HTMLButtonElement>('button'),
     ].find((button) =>
       button.textContent?.includes('sizing the bloom filter'),
     )!;
@@ -22338,24 +22338,24 @@ describe('Chats — searching every chat', () => {
 
   it('opens on Cmd+Shift+F only while this screen is the one shown', async () => {
     const { client } = makeClient();
-    const hidden = await mount(client, undefined, { active: false });
+    await mount(client, undefined, { active: false });
     await pressShortcut();
     expect(
-      hidden.querySelector('input[aria-label="Search all chats"]'),
+      document.querySelector('input[aria-label="Search all chats"]'),
     ).toBeNull();
 
-    const shown = await mount(makeClient().client);
+    await mount(makeClient().client);
     await pressShortcut();
     expect(
-      shown.querySelector('input[aria-label="Search all chats"]'),
+      document.querySelector('input[aria-label="Search all chats"]'),
     ).not.toBeNull();
   });
 
   it('opens on Ctrl+Shift+F as well, for a keyboard without Cmd', async () => {
-    const container = await mount(makeClient().client);
+    await mount(makeClient().client);
     await pressShortcut('ctrl');
     expect(
-      container.querySelector('input[aria-label="Search all chats"]'),
+      document.querySelector('input[aria-label="Search all chats"]'),
     ).not.toBeNull();
   });
 
@@ -22368,7 +22368,7 @@ describe('Chats — searching every chat', () => {
     const container = await mount(makeClient().client);
     await clickRun(container, 'My chat');
 
-    await pickHit(container);
+    await pickHit();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(50);
     });
@@ -22394,7 +22394,7 @@ describe('Chats — searching every chat', () => {
     });
     const container = await mount(makeClient().client);
     await clickRun(container, 'My chat');
-    await pickHit(container);
+    await pickHit();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(50);
     });
@@ -22421,7 +22421,7 @@ describe('Chats — searching every chat', () => {
     const container = await mount(makeClient().client);
     await pickScope(container, 'Archived only');
     api.listChats.mockClear();
-    await pickHit(container);
+    await pickHit();
     expect(api.listChats).toHaveBeenCalledWith({
       scope: 'all',
       limit: RUN_LIST_PAGE + 1,
@@ -22433,8 +22433,8 @@ describe('Chats — searching every chat', () => {
       hits: [hitIn('r2', 12, true)],
       partialReason: null,
     });
-    const container = await mount(makeClient().client);
-    await pickHit(container);
+    await mount(makeClient().client);
+    await pickHit();
     expect(api.listChats).toHaveBeenCalledWith({
       scope: 'all',
       limit: RUN_LIST_PAGE + 1,
@@ -22456,7 +22456,7 @@ describe('Chats — searching every chat', () => {
     });
     const container = await mount(makeClient().client);
     await clickRun(container, 'My chat');
-    await pickHit(container);
+    await pickHit();
 
     await clickRun(container, 'My chat');
     await act(async () => {

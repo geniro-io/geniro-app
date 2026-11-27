@@ -72,20 +72,20 @@ function type(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
 }
 
 function nameInput(): HTMLInputElement {
-  return container.querySelector<HTMLInputElement>('#team-name')!;
+  return document.querySelector<HTMLInputElement>('#team-name')!;
 }
 
 function descriptionInput(): HTMLTextAreaElement {
-  return container.querySelector<HTMLTextAreaElement>('#team-description')!;
+  return document.querySelector<HTMLTextAreaElement>('#team-description')!;
 }
 
 function limitSwitch(): HTMLButtonElement {
-  return container.querySelector<HTMLButtonElement>('#team-limit-turns')!;
+  return document.querySelector<HTMLButtonElement>('#team-limit-turns')!;
 }
 
 function capValue(): string | null {
   return (
-    container
+    document
       .querySelector('[role="spinbutton"]')
       ?.getAttribute('aria-valuenow') ?? null
   );
@@ -93,21 +93,21 @@ function capValue(): string | null {
 
 function press(label: string): void {
   act(() => {
-    container
+    document
       .querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
 }
 
 function submitButton(): HTMLButtonElement {
-  return Array.from(container.querySelectorAll('button')).find((b) =>
+  return Array.from(document.querySelectorAll('button')).find((b) =>
     /Create|Creating…/.test(b.textContent ?? ''),
   )!;
 }
 
 function submit(): void {
   act(() => {
-    container
+    document
       .querySelector('form')!
       .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
   });
@@ -153,7 +153,7 @@ describe('TeamMetaDialog', () => {
 
   it('Cancel closes without submitting', () => {
     render();
-    const cancel = Array.from(container.querySelectorAll('button')).find(
+    const cancel = Array.from(document.querySelectorAll('button')).find(
       (b) => b.textContent === 'Cancel',
     )!;
     act(() => {
@@ -174,7 +174,7 @@ describe('TeamMetaDialog', () => {
 
   it('shows a submit error inside the dialog', () => {
     render({ error: 'boom' });
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain(
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
       'boom',
     );
   });
@@ -207,7 +207,7 @@ describe('TeamMetaDialog', () => {
     expect(limitSwitch().getAttribute('aria-checked')).toBe('false');
     expect(capValue()).toBeNull();
     expect(
-      container.querySelector('[data-slot="max-active-turns-ceiling"]')
+      document.querySelector('[data-slot="max-active-turns-ceiling"]')
         ?.textContent,
     ).toBe('up to 12, this Mac’s ceiling');
     type(nameInput(), 'Team');
@@ -234,13 +234,13 @@ describe('TeamMetaDialog', () => {
     });
     expect(capValue()).toBe('2');
     expect(
-      container.querySelector<HTMLButtonElement>(
+      document.querySelector<HTMLButtonElement>(
         'button[aria-label="Increase Agents working at once"]',
       )!.disabled,
     ).toBe(true);
     press('Decrease Agents working at once');
     expect(
-      container.querySelector<HTMLButtonElement>(
+      document.querySelector<HTMLButtonElement>(
         'button[aria-label="Decrease Agents working at once"]',
       )!.disabled,
     ).toBe(true);

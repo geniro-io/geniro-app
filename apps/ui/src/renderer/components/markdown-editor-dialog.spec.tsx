@@ -59,11 +59,11 @@ function render(props: Partial<Props> = {}): void {
 }
 
 function editor(): HTMLTextAreaElement {
-  const el = container.querySelector<HTMLTextAreaElement>(
+  const el = document.body.querySelector<HTMLTextAreaElement>(
     '[data-testid="md-editor"]',
   );
   if (!el) {
-    throw new Error(`no editor rendered (saw: ${container.textContent})`);
+    throw new Error(`no editor rendered (saw: ${document.body.textContent})`);
   }
   return el;
 }
@@ -80,10 +80,10 @@ function type(el: HTMLTextAreaElement, value: string): void {
 
 function button(label: string): HTMLButtonElement {
   const found = [
-    ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ...document.body.querySelectorAll<HTMLButtonElement>('button'),
   ].find((el) => el.textContent?.trim() === label);
   if (!found) {
-    throw new Error(`no "${label}" button (saw: ${container.textContent})`);
+    throw new Error(`no "${label}" button (saw: ${document.body.textContent})`);
   }
   return found;
 }
@@ -97,12 +97,12 @@ function click(el: HTMLElement): void {
 describe('MarkdownEditorDialog', () => {
   it('renders nothing until opened', () => {
     render({ open: false });
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('opens on the current value, titled by the field it edits', () => {
     render({ value: 'You are the Reviewer.' });
-    expect(container.textContent).toContain('Role / system prompt');
+    expect(document.body.textContent).toContain('Role / system prompt');
     expect(editor().value).toBe('You are the Reviewer.');
   });
 
@@ -162,13 +162,13 @@ describe('MarkdownEditorDialog', () => {
 
     type(editor(), 'too long');
     expect(button('Save').disabled).toBe(true);
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe(
       '3 characters over the 5 limit',
     );
 
     type(editor(), 'fits');
     expect(button('Save').disabled).toBe(false);
-    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(document.body.querySelector('[role="alert"]')).toBeNull();
     click(button('Save'));
     expect(onSave).toHaveBeenCalledWith('fits');
   });

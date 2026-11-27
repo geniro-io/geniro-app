@@ -77,7 +77,7 @@ const DEFINITIONS: TeamStage[] = [
 const NAMES: Record<string, string> = { lead: 'Lead', reviewer: 'Reviewer' };
 const agentName = (memberId: string): string => NAMES[memberId] ?? memberId;
 
-function mount(over: Partial<RunStages> = {}): HTMLDivElement {
+function mount(over: Partial<RunStages> = {}): HTMLElement {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -95,7 +95,7 @@ function mount(over: Partial<RunStages> = {}): HTMLDivElement {
       />,
     );
   });
-  return container;
+  return document.body;
 }
 
 const row = (el: HTMLElement, id: string): HTMLElement =>

@@ -13,14 +13,14 @@ import { McpDialogButton } from './mcp-dialog-button';
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
-function render(element: React.ReactElement): HTMLDivElement {
+function render(element: React.ReactElement): HTMLElement {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
     root!.render(element);
   });
-  return container;
+  return document.body;
 }
 
 afterEach(() => {
@@ -52,7 +52,7 @@ const listing = (names: string[]): AgentMcpListing => ({
   pending: false,
 });
 
-const trigger = (el: HTMLDivElement): HTMLButtonElement =>
+const trigger = (el: HTMLElement): HTMLButtonElement =>
   el.querySelector<HTMLButtonElement>('[aria-label="MCP servers"]')!;
 
 describe('McpDialogButton', () => {

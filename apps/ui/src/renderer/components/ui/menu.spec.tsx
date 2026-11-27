@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { stubCssZoom } from '../../__tests__/stub-css-zoom';
 import { POINTER_GRACE_MS } from '../use-pointer-grace';
+import { Dialog } from './dialog';
 import { Menu, type MenuGroup } from './menu';
 
 (
@@ -1523,5 +1524,48 @@ describe('Menu — escaping a clipping container', () => {
 
     expect(panel(el).style.position).toBe('');
     expect(panel(el).className).toContain('top-full');
+  });
+});
+
+describe('Menu — a dialog opened above it', () => {
+  function pressOn(target: Element | null): void {
+    act(() => {
+      target?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+  }
+
+  function renderUnderDialog(onClose: () => void): void {
+    render(
+      <>
+        <button type="button">elsewhere</button>
+        <Menu
+          open
+          groups={[{ items: [{ value: 'a', label: 'A' }] }]}
+          onSelect={vi.fn()}
+          onClose={onClose}
+        />
+        <Dialog open onClose={vi.fn()} title="Above">
+          <input aria-label="Field above" />
+        </Dialog>
+      </>,
+    );
+  }
+
+  it('stays open on a press inside that dialog', () => {
+    const onClose = vi.fn();
+    renderUnderDialog(onClose);
+
+    pressOn(document.querySelector('[aria-label="Field above"]'));
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('still closes on a press outside both', () => {
+    const onClose = vi.fn();
+    renderUnderDialog(onClose);
+
+    pressOn(container!.querySelector('button'));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

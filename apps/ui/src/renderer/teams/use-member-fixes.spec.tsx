@@ -88,7 +88,7 @@ describe('useMemberFixes', () => {
       agent: 'codex',
       configDir: '/p/work',
     });
-    expect(container.textContent).toContain('Waiting for you to finish');
+    expect(document.body.textContent).toContain('Waiting for you to finish');
   });
 
   it('opens the MCP dialog for the problem’s agent and profile', async () => {

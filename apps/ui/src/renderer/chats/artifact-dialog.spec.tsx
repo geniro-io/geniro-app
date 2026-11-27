@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { afterPopstate } from '../__tests__/after-popstate';
 import { ArtifactDialog } from './artifact-dialog';
 import { BrowserPaneContext } from './browser/browser-pane-context';
 import {
@@ -28,6 +29,7 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  history.replaceState(null, '');
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -128,7 +130,16 @@ describe('ArtifactDialog — a picture the page shows, then the page', () => {
     expect(document.querySelector('iframe')).not.toBeNull();
 
     focusFrame();
-    await postFromFrame({ type: 'escape' });
+    await afterPopstate(
+      () =>
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            data: { source: 'geniro-artifact', type: 'escape' },
+            source: document.querySelector('iframe')?.contentWindow ?? null,
+          }),
+        ),
+      'the page’s Escape',
+    );
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

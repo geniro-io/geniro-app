@@ -76,7 +76,7 @@ function mount({
   onMove?: (dto: MoveTeamRunStageDto) => Promise<StageMoveResultDto>;
   onMoved?: (result: StageMoveResultDto) => void;
   onClose?: () => void;
-}): { el: HTMLDivElement; rerender: (progress: StageProgress) => void } {
+}): { el: HTMLElement; rerender: (progress: StageProgress) => void } {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -94,7 +94,7 @@ function mount({
     });
   };
   draw(progress);
-  return { el: container, rerender: draw };
+  return { el: document.body, rerender: draw };
 }
 
 function type(el: HTMLElement, text: string): void {

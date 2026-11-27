@@ -13,14 +13,14 @@ import { ShellOutputDialog } from './shell-output-dialog';
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
-async function render(element: React.ReactElement): Promise<HTMLDivElement> {
+async function render(element: React.ReactElement): Promise<HTMLElement> {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () => {
     root!.render(element);
   });
-  return container;
+  return document.body;
 }
 
 const shell = (over: Partial<ShellRun> = {}): ShellRun => ({

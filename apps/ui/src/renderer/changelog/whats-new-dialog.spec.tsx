@@ -43,14 +43,14 @@ afterEach(() => {
 });
 
 function button(label: string): HTMLButtonElement {
-  return [...container.querySelectorAll('button')].find(
+  return [...document.querySelectorAll('button')].find(
     (node) => node.textContent === label,
   )!;
 }
 
 function entryLines(): string[] {
   return [
-    ...container.querySelectorAll('[data-slot="changelog-digest"] li'),
+    ...document.querySelectorAll('[data-slot="changelog-digest"] li'),
   ].map((node) => node.textContent ?? '');
 }
 
@@ -69,7 +69,7 @@ describe('WhatsNewDialog', () => {
       ),
     );
 
-    const range = container.querySelector('[data-slot="whats-new-range"]');
+    const range = document.querySelector('[data-slot="whats-new-range"]');
     expect(range?.textContent).toContain('1.1.0');
     expect(range?.textContent).toContain('1.3.0');
     expect(range?.textContent).toContain('You updated from 1.1.0 to 1.3.0');
@@ -90,14 +90,14 @@ describe('WhatsNewDialog', () => {
     );
 
     expect(
-      container.querySelectorAll('[data-slot="changelog-digest"]'),
+      document.querySelectorAll('[data-slot="changelog-digest"]'),
     ).toHaveLength(1);
     expect(
-      container.querySelector('[data-slot="changelog-release"]'),
+      document.querySelector('[data-slot="changelog-release"]'),
     ).toBeNull();
     expect(entryLines()).toEqual(['Third1.3.0Why it helps.', 'Second1.2.0']);
     expect(
-      container.querySelector('[data-slot="changelog-entry-description"]')
+      document.querySelector('[data-slot="changelog-entry-description"]')
         ?.textContent,
     ).toBe('Why it helps.');
   });
@@ -116,10 +116,10 @@ describe('WhatsNewDialog', () => {
       ),
     );
 
-    const card = container.querySelector('[role="dialog"] > div[tabindex]');
+    const card = document.querySelector('[role="dialog"] > div[tabindex]');
     expect(card?.classList.contains('h-full')).toBe(true);
     expect(card?.classList.contains('max-w-none')).toBe(true);
-    const body = container.querySelector('[data-slot="whats-new-body"]');
+    const body = document.querySelector('[data-slot="whats-new-body"]');
     expect(body?.classList.contains('overflow-y-auto')).toBe(true);
     expect(
       body?.querySelector('[data-slot="changelog-digest"]'),
@@ -141,7 +141,7 @@ describe('WhatsNewDialog', () => {
       ),
     );
 
-    const range = container.querySelector('[data-slot="whats-new-range"]');
+    const range = document.querySelector('[data-slot="whats-new-range"]');
     expect(range?.textContent).toBe('1.3.0What changed in this version.');
     expect(entryLines()).toEqual(['ThirdWhy it helps.']);
   });

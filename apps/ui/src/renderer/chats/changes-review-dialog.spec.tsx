@@ -8,6 +8,7 @@ import type {
   GitChange,
   ReadFileLinesRequest,
 } from '../../shared/contracts';
+import { afterPopstate } from '../__tests__/after-popstate';
 import { ChangesReviewDialog } from './changes-review-dialog';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import type { ReviewComment, ReviewController } from './use-review-comments';
@@ -232,6 +233,7 @@ afterEach(async () => {
 });
 
 beforeEach(() => {
+  history.replaceState(null, '');
   localStorage.clear();
 });
 
@@ -395,7 +397,13 @@ describe('ChangesReviewDialog — the screen', () => {
     const onClose = vi.fn();
     await mount(screen({ onClose }));
 
-    await keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await afterPopstate(
+      () =>
+        void keyDown(document.activeElement ?? document.body, {
+          key: 'Escape',
+        }),
+      'Escape',
+    );
 
     expect(onClose).toHaveBeenCalled();
   });
@@ -404,7 +412,7 @@ describe('ChangesReviewDialog — the screen', () => {
     const onClose = vi.fn();
     await mount(screen({ onClose }));
 
-    await press(must('Close'));
+    await afterPopstate(() => void press(must('Close')), 'the ✕');
 
     expect(onClose).toHaveBeenCalled();
   });

@@ -48,47 +48,45 @@ function renderDialog(
 }
 
 function button(label: string): HTMLButtonElement | undefined {
-  return [...container.querySelectorAll('button')].find(
+  return [...document.querySelectorAll('button')].find(
     (node) => node.textContent === label,
   );
 }
 
 function checkboxes(): HTMLButtonElement[] {
-  return [
-    ...container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]'),
-  ];
+  return [...document.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')];
 }
 
 describe('HeldRunsDialog', () => {
   it('shows nothing while closed', () => {
     renderDialog({ open: false });
 
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('titles the dialog for one run and for several', () => {
     renderDialog({ runs: RUNS.slice(0, 1) });
     expect(
-      container.querySelector('[data-slot="dialog-title"]')?.textContent,
+      document.querySelector('[data-slot="dialog-title"]')?.textContent,
     ).toBe('1 team run was interrupted by a crash');
 
     renderDialog();
     expect(
-      container.querySelector('[data-slot="dialog-title"]')?.textContent,
+      document.querySelector('[data-slot="dialog-title"]')?.textContent,
     ).toBe('3 team runs were interrupted by a crash');
   });
 
   it('offers no corner ✕, so only its buttons close it', () => {
     renderDialog();
 
-    expect(container.querySelector('[aria-label="Close"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Close"]')).toBeNull();
   });
 
   it('lists each run by its title, and an untitled one as Untitled run', () => {
     renderDialog();
 
     expect(
-      [...container.querySelectorAll('li')].map((item) => item.textContent),
+      [...document.querySelectorAll('li')].map((item) => item.textContent),
     ).toEqual(['Ship the login flow', 'Untitled run', 'Triage the inbox']);
   });
 
@@ -171,7 +169,7 @@ describe('HeldRunsDialog', () => {
   it('shows the error under the list', () => {
     renderDialog({ error: 'Could not reach Geniro — try again.' });
 
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
       'Could not reach Geniro — try again.',
     );
   });

@@ -43,13 +43,13 @@ function render(props: Partial<Props> = {}): void {
   });
 }
 
-/** Buttons live in the portal-less dialog rendered into our container. */
+/** Buttons live in the dialog portalled into document.body. */
 function button(label: string): HTMLButtonElement {
   const found = [
-    ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ...document.body.querySelectorAll<HTMLButtonElement>('button'),
   ].find((el) => el.textContent?.trim() === label);
   if (!found) {
-    throw new Error(`no "${label}" button (saw: ${container.textContent})`);
+    throw new Error(`no "${label}" button (saw: ${document.body.textContent})`);
   }
   return found;
 }
@@ -63,14 +63,16 @@ function click(el: HTMLElement): void {
 describe('ConfirmDialog', () => {
   it('renders nothing until opened', () => {
     render({ open: false });
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('shows the title, the consequence, and both choices', () => {
     render();
-    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
-    expect(container.textContent).toContain('Delete team');
-    expect(container.textContent).toContain('Delete Review Team permanently?');
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.body.textContent).toContain('Delete team');
+    expect(document.body.textContent).toContain(
+      'Delete Review Team permanently?',
+    );
     expect(button('Cancel')).toBeTruthy();
     expect(button('Delete')).toBeTruthy();
   });
@@ -125,9 +127,9 @@ describe('ConfirmDialog', () => {
 
   it('keeps a failed action visible instead of pretending it worked', () => {
     render({ error: 'ENOENT: no such file' });
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-      'ENOENT: no such file',
-    );
+    expect(
+      document.body.querySelector('[role="alert"]')?.textContent,
+    ).toContain('ENOENT: no such file');
     expect(button('Delete')).toBeTruthy();
   });
 });

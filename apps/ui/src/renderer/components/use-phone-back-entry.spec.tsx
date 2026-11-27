@@ -97,6 +97,29 @@ describe('usePhoneBackEntry', () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it('pushes a second entry for a page of the same kind opened over one still open, so back closes only it', async () => {
+    const push = vi.spyOn(history, 'pushState');
+    const closeOuter = vi.fn();
+    const closeInner = vi.fn();
+    function Two({ inner }: { inner: boolean }): null {
+      usePhoneBackEntry('full-screen-dialog', true, closeOuter);
+      usePhoneBackEntry('full-screen-dialog', inner, closeInner);
+      return null;
+    }
+    await act(async () => {
+      root.render(<Two inner={false} />);
+    });
+    await act(async () => {
+      root.render(<Two inner />);
+    });
+    expect(push).toHaveBeenCalledTimes(2);
+
+    await systemBack();
+
+    expect(closeInner).toHaveBeenCalledTimes(1);
+    expect(closeOuter).not.toHaveBeenCalled();
+  });
+
   it('keeps a page’s entry when a page stacked on it pops, so the next back closes it', async () => {
     const closeTeam = vi.fn();
     const closeMember = vi.fn();

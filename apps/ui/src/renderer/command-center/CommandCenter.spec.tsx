@@ -872,7 +872,7 @@ const NO_LESSONS = {
 };
 
 function dialogButton(text: string): HTMLButtonElement {
-  const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
   return [...dialog.querySelectorAll<HTMLButtonElement>('button')].find(
     (button) => button.textContent === text,
   )!;
@@ -910,7 +910,7 @@ describe('CommandCenter — archiving a finished thread', () => {
     });
     await settle();
 
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain(
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
       'Archive chat',
     );
     expect(estimateLessons).toHaveBeenCalledWith({ runId: 'run-d' });
@@ -925,7 +925,7 @@ describe('CommandCenter — archiving a finished thread', () => {
       runId: 'run-d',
       lessons: undefined,
     });
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(container.textContent).toContain('Archived Thread run-d');
 
     await act(async () => {

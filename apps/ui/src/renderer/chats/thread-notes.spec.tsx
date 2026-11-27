@@ -193,13 +193,13 @@ describe('ThreadNotes', () => {
         )!
         .click();
     });
-    const popup = container!.querySelector<HTMLTextAreaElement>(
+    const popup = document.querySelector<HTMLTextAreaElement>(
       '[data-testid="md-editor"]',
     )!;
     expect(popup.value).toBe('short');
     type(popup, 'a much longer note\nwritten in the popup');
     act(() => {
-      [...container!.querySelectorAll<HTMLButtonElement>('button')]
+      [...document.querySelectorAll<HTMLButtonElement>('button')]
         .find((el) => el.textContent?.trim() === 'Save')!
         .click();
     });

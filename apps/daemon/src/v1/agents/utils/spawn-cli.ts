@@ -23,6 +23,7 @@ import {
   commandTargets,
   descendantsOf,
   endedRecordOf,
+  groupSubtree,
   isGroupAnchored,
   listProcesses,
   type ProcessRow,
@@ -3075,31 +3076,59 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (processGone) {
       return;
     }
+    // A call the CLI answered as finished (cursor) is only what still runs
+    // in its tree: a group a reading caught it in while it ran is not
+    // carried over, or a leftover the CLI never counted would be.
+    const anchoredOf = (workId: string): RecordedGroup[] =>
+      executeCalls.get(workId)?.returned === true && !runningShells.has(workId)
+        ? []
+        : (commandGroups.get(workId) ?? []).filter((group) =>
+            isGroupAnchored(group, rows),
+          );
+    const claimed = new Map(
+      running.map((workId) => [workId, groupSubtree(rows, anchoredOf(workId))]),
+    );
     for (const workId of running) {
-      // A call the CLI answered as finished (cursor) is only what still runs
-      // in its tree: a group a reading caught it in while it ran is not
-      // carried over, or a leftover the CLI never counted would be.
-      const answered =
-        executeCalls.get(workId)?.returned === true &&
-        !runningShells.has(workId);
-      const pgids = new Set(
-        (answered ? [] : (commandGroups.get(workId) ?? []))
-          .filter((group) => isGroupAnchored(group, rows))
-          .map((group) => group.pgid),
+      const anchored = anchoredOf(workId);
+      const own = claimed.get(workId) ?? new Set<number>();
+      // Text is looser than structure: once a command has groups of its own,
+      // it is searched for only among them and what they started, and never
+      // among the processes another running command already holds.
+      const othersHold = new Set(
+        [...claimed]
+          .filter(([other]) => other !== workId)
+          .flatMap(([, pids]) => [...pids])
+          .filter((pid) => !own.has(pid)),
       );
+      const searched = tree.filter(
+        (row) =>
+          !othersHold.has(row.pid) &&
+          (anchored.length === 0 || own.has(row.pid)),
+      );
+      const pgids = new Set(anchored.map((group) => group.pgid));
       const call = shellWork.get(workId) ?? delegateCommandCalls.get(workId);
       const command =
         (call === undefined ? undefined : callCommands.get(call)) ??
         executeCalls.get(workId)?.command;
-      if (command !== undefined) {
-        for (const pid of [
-          ...commandTargets(tree, command),
-          ...recordedPidsRunning(tree, records, command),
-        ]) {
-          const pgid = groupOf.get(pid);
-          if (pgid !== undefined) {
-            pgids.add(pgid);
-          }
+      const matched =
+        command === undefined
+          ? []
+          : [
+              ...commandTargets(searched, command),
+              ...recordedPidsRunning(tree, records, command),
+            ];
+      // A program the command started may lead a group of its own (a
+      // browser, a `setsid` child): it is still the command's own process.
+      for (const pid of [
+        ...own,
+        ...matched.flatMap((top) => [
+          top,
+          ...descendantsOf(rows, top).map((row) => row.pid),
+        ]),
+      ]) {
+        const pgid = groupOf.get(pid);
+        if (pgid !== undefined) {
+          pgids.add(pgid);
         }
       }
       pgids.delete(rootPid);

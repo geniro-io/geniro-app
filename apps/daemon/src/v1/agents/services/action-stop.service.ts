@@ -101,15 +101,47 @@ export class ActionStopService {
     }
   }
 
+  /**
+   * The commands of every other background command of the run still open, so
+   * a looser reading of this one never takes a process of theirs.
+   */
+  private async otherCommands(
+    runId: string,
+    runRows: Awaited<ReturnType<ItemDao['shellRows']>>,
+    memberId: string | null,
+    shell: StrandedShell,
+    em: EntityManager,
+  ): Promise<string[]> {
+    const others = membersOf(runRows).flatMap((memberRows) =>
+      strandedShells(memberRows).filter(
+        (open) =>
+          !(
+            memberRows[0]?.memberId === memberId && open.workId === shell.workId
+          ),
+      ),
+    );
+    const calls = await this.itemDao.toolCallsByIds(
+      runId,
+      others.flatMap((open) =>
+        open.toolCallId === null ? [] : [open.toolCallId],
+      ),
+      em,
+    );
+    return others.flatMap((open) => {
+      const call = launchingCallOf(open, calls);
+      const command = call === undefined ? null : shellCommandOf(call.payload);
+      return command === null ? [] : [command];
+    });
+  }
+
   private async resolveShell(
     runId: string,
     memberId: string | null,
     shellId: string,
   ): Promise<ActionStopSpec | { reason: string }> {
     const em = this.em.fork();
-    const rows = (await this.itemDao.shellRows(runId, em)).filter(
-      (row) => row.memberId === memberId,
-    );
+    const runRows = await this.itemDao.shellRows(runId, em);
+    const rows = runRows.filter((row) => row.memberId === memberId);
     const shells = strandedShells(rows);
     // The fold keys a member's shells by work id, and an ACP work id is a call
     // id each session restarts — so another conversation's shell by the same
@@ -164,7 +196,11 @@ export class ActionStopService {
       };
     }
     const candidates = await this.reaper.stopCandidates(runId);
-    const tops = commandTargets(candidates, command);
+    const tops = commandTargets(
+      candidates,
+      command,
+      await this.otherCommands(runId, runRows, memberId, shell, em),
+    );
     if (tops.length === 0) {
       return {
         reason: `"${shellId}" runs no process of this chat that can be stopped; ${NAME_A_PID}`,
@@ -184,6 +220,13 @@ export class ActionStopService {
         .map((row) => targetOf(row)),
     };
   }
+}
+
+/** The rows of one member's shells, each fold's own. */
+function membersOf<T extends { memberId: string | null }>(rows: readonly T[]) {
+  return [...new Set(rows.map((row) => row.memberId))].map((member) =>
+    rows.filter((row) => row.memberId === member),
+  );
 }
 
 function targetOf(

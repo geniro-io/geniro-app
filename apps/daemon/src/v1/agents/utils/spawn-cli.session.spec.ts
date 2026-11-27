@@ -6395,6 +6395,43 @@ describe('where a session’s detached commands run', () => {
     ]);
   });
 
+  it('records the group a program the command started leads of its own, such as a browser', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, "/bin/zsh -c eval 'node e2e.js'"),
+      row(201, 200, 200, 'node e2e.js'),
+      row(202, 201, 202, 'Google Chrome for Testing --headless', 3_000_000),
+    ]);
+    background(child, 'b1', 't1', 'node e2e.js');
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)?.map((group) => group.pgid)).toEqual([
+      200, 202,
+    ]);
+  });
+
+  it('never records for a command a process another running command already holds', async () => {
+    let table = [
+      ...CLI_AND_MCP,
+      row(300, 100, 300, '/bin/sh -c pnpm dev'),
+      row(301, 300, 300, 'node /opt/pnpm dev'),
+    ];
+    const { session, child, reads } = openRecordingSession(() => table);
+    background(child, 'b1', 't1', 'pnpm dev');
+    await afterReading(reads, 1);
+
+    table = [...table, row(400, 100, 400, 'node /opt/pnpm dev', 4_000_000)];
+    background(child, 'b2', 't2', 'cd web\npnpm dev');
+    await afterReading(reads, 2);
+
+    expect(session.recordedGroupsOf('t2')?.map((group) => group.pgid)).toEqual([
+      400,
+    ]);
+    expect(session.recordedGroupsOf('t1')?.map((group) => group.pgid)).toEqual([
+      300,
+    ]);
+  });
+
   it('finds a command whose text is not in the table through the CLI’s own record', async () => {
     const heredoc = "python3 << 'PY'\nprint(1)\nPY";
     const { session, child, reads } = openRecordingSession(

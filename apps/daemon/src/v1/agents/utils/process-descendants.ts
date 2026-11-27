@@ -98,6 +98,25 @@ export function isGroupAnchored(
 }
 
 /**
+ * The processes still running in `groups`, with every process they have
+ * started since, wherever its own group is.
+ */
+export function groupSubtree(
+  rows: readonly PlainProcess[],
+  groups: readonly RecordedGroup[],
+): Set<number> {
+  const pgids = new Set(groups.map((group) => group.pgid));
+  return new Set(
+    rows
+      .filter((row) => pgids.has(row.pgid))
+      .flatMap((row) => [
+        row.pid,
+        ...descendantsOf(rows, row.pid).map(({ pid }) => pid),
+      ]),
+  );
+}
+
+/**
  * Every process descending from `rootPid`, at any depth.
  *
  * Depth matters and is the reason this walks rather than filtering on `ppid`:
@@ -292,18 +311,31 @@ function withoutQuoting(value: string): string {
  * the run.
  */
 export function commandNeedles(command: string): string[] {
-  const written = normalizeCommand(command);
-  const needles = [written];
-  const inner = unwrapShell(written);
-  if (inner !== null) {
-    needles.push(inner);
-  }
-  for (const segment of (inner ?? written).split(SHELL_SEPARATORS)) {
-    const core = commandCore(segment);
-    if (core !== null) {
-      needles.push(core);
-    }
-  }
+  const { whole, parts } = needleSets(command);
+  return [...new Set([...whole, ...parts])];
+}
+
+/**
+ * {@link commandNeedles} in two sets: the command's whole text (as written, and
+ * the script a shell was handed), then the single commands it runs.
+ */
+function needleSets(command: string): { whole: string[]; parts: string[] } {
+  const body = unwrapShell(command.trim());
+  return {
+    whole: specific([
+      normalizeCommand(command),
+      ...(body === null ? [] : [normalizeCommand(body)]),
+    ]),
+    parts: specific(
+      commandSegments(body ?? command).flatMap((segment) => {
+        const core = commandCore(normalizeCommand(segment));
+        return core === null ? [] : [core];
+      }),
+    ),
+  };
+}
+
+function specific(needles: readonly string[]): string[] {
   return [...new Set(needles)].filter(
     (needle) => needle.length >= MIN_NEEDLE_CHARS,
   );
@@ -321,31 +353,57 @@ export function commandNeedles(command: string): string[] {
  * quoting removed.
  *
  * `owned` must already be confined to one run's own process tree: the derived
- * needles are looser than the command (see {@link commandNeedles}).
+ * needles are looser than the command (see {@link commandNeedles}). A single
+ * command of a script is looser still, so it never reaches a process that one
+ * of `others` — the commands running beside it — matches, nor what that
+ * process started.
  */
 export function commandTargets(
   owned: readonly ProcessRow[],
   command: string,
+  others: readonly string[] = [],
 ): number[] {
   const unquoted = owned.map((row) => ({
     ...row,
     args: withoutQuoting(row.args),
   }));
-  const asWritten = commandNeedles(command);
-  const unquotedNeedles = [...new Set(asWritten.map(withoutQuoting))].filter(
-    (needle) => needle.length >= MIN_NEEDLE_CHARS,
-  );
-  const readings: [readonly ProcessRow[], string[]][] = [
-    [owned, asWritten],
-    [unquoted, unquotedNeedles],
+  const { whole, parts } = needleSets(command);
+  let held: Set<number> | null = null;
+  const apart = (rows: readonly ProcessRow[]): readonly ProcessRow[] => {
+    held ??= heldByOthers(owned, others);
+    const taken = held;
+    return rows.filter((row) => !taken.has(row.pid));
+  };
+  const unquote = (needles: readonly string[]): string[] =>
+    specific(needles.map(withoutQuoting));
+  const readings: [() => readonly ProcessRow[], string[]][] = [
+    [() => owned, whole],
+    [() => apart(owned), parts],
+    [() => unquoted, unquote(whole)],
+    [() => apart(unquoted), unquote(parts)],
   ];
   for (const [rows, needles] of readings) {
-    const targets = topMatches(rows, needles);
+    const targets = topMatches(rows(), needles);
     if (targets.length > 0) {
       return targets;
     }
   }
   return [];
+}
+
+/** What any of `others` matches among `owned`, with everything it started. */
+function heldByOthers(
+  owned: readonly ProcessRow[],
+  others: readonly string[],
+): Set<number> {
+  return new Set(
+    others
+      .flatMap((other) => commandTargets(owned, other))
+      .flatMap((pid) => [
+        pid,
+        ...descendantsOf(owned, pid).map((row) => row.pid),
+      ]),
+  );
 }
 
 /** The matches of the first needle that matches anything, wrappers over what they wrap. */
@@ -410,15 +468,41 @@ function unwrapShell(command: string): string | null {
   }
   const [, quote, raw = ''] = match;
   // `'\''` is how a single quote is written inside a single-quoted string.
-  const body = quote === "'" ? raw.replace(/'\\''/g, "'") : raw;
-  return normalizeCommand(body);
+  return quote === "'" ? raw.replace(/'\\''/g, "'") : raw;
 }
+
+/**
+ * The commands a script runs one after another: each line, split at the
+ * separators within it. A shell execs the last line of a script in place of
+ * itself, so only that line's own text is left in the table. A heredoc's body
+ * is input, not commands, and is skipped to its delimiter.
+ */
+function commandSegments(script: string): string[] {
+  const segments: string[] = [];
+  let heredocEnd: string | null = null;
+  for (const line of script.replace(/\\\r?\n/g, ' ').split(/\r?\n/)) {
+    if (heredocEnd !== null) {
+      if (line.trim() === heredocEnd) {
+        heredocEnd = null;
+      }
+      continue;
+    }
+    heredocEnd = HEREDOC_START.exec(line)?.[2] ?? null;
+    segments.push(...line.split(SHELL_SEPARATORS));
+  }
+  return segments;
+}
+
+/** `<<WORD`, `<< 'WORD'`, `<<-"WORD"` — never a `<<<` here-string. */
+const HEREDOC_START = /(?<!<)<<-?\s*(['"]?)([A-Za-z0-9_]+)\1/;
 
 /**
  * What a segment leaves running once `nohup`, `env` and the shell have exec'd
  * away: a leading `nohup`, the `env [-i] [-u NAME]…` and `NAME=value`
- * assignments dropped, and everything from the first redirection on cut, since
- * `ps` never shows one.
+ * assignments dropped, and everything from the first redirection or a `#`
+ * comment on cut, since `ps` never shows either — outside quotes only. None for
+ * a heredoc: what is left of it is a bare program name, which would match every
+ * other run of that program in the tree.
  */
 function commandCore(segment: string): string | null {
   const words = segment.trim().split(' ');
@@ -438,15 +522,38 @@ function commandCore(segment: string): string | null {
     words.shift();
   }
   const rest: string[] = [];
+  let quote: string | null = null;
   for (const word of words) {
-    if (/^\d*[<>]/.test(word)) {
-      break;
+    if (quote === null) {
+      if (/^\d*<<(?!<)/.test(word)) {
+        return null;
+      }
+      if (word.startsWith('#') || /^\d*[<>]/.test(word)) {
+        break;
+      }
     }
     rest.push(word);
+    quote = quoteOpenAfter(word, quote);
   }
   const [program] = rest;
   if (program === undefined || program === '' || SHELL_BUILTINS.has(program)) {
     return null;
   }
   return rest.join(' ');
+}
+
+/** The quote still open once `word` is read, from `open` before it. */
+function quoteOpenAfter(word: string, open: string | null): string | null {
+  let quote = open;
+  for (let i = 0; i < word.length; i += 1) {
+    const char = word[i];
+    if (char === '\\' && quote !== "'") {
+      i += 1;
+    } else if (quote === null && (char === "'" || char === '"')) {
+      quote = char;
+    } else if (char === quote) {
+      quote = null;
+    }
+  }
+  return quote;
 }

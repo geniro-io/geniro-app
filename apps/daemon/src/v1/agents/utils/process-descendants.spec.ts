@@ -226,6 +226,28 @@ describe('commandNeedles', () => {
     ]);
   });
 
+  it('reads each line of a script as a command, and a heredoc’s body as none', () => {
+    expect(
+      commandNeedles(
+        "cd app\npnpm install\npython3 - <<'PY'\nprint(1)\nPY\npnpm dev",
+      ),
+    ).toEqual([
+      "cd app pnpm install python3 - <<'PY' print(1) PY pnpm dev",
+      'pnpm install',
+      'pnpm dev',
+    ]);
+  });
+
+  it('cuts a trailing comment, never a # inside quotes or a word', () => {
+    expect(commandNeedles('grep -r "#todo" src # find todos')).toEqual([
+      'grep -r "#todo" src # find todos',
+      'grep -r "#todo" src',
+    ]);
+    expect(commandNeedles('curl http://host/#top')).toEqual([
+      'curl http://host/#top',
+    ]);
+  });
+
   it('keeps nothing too short to be specific', () => {
     expect(commandNeedles('ls')).toEqual([]);
   });
@@ -274,6 +296,50 @@ describe('commandTargets', () => {
     ];
 
     expect(commandTargets(tree, "perl -e 'x y z'")).toEqual([300]);
+  });
+
+  it('finds the last line of a script a shell has exec’d in its place', () => {
+    const tree: ProcessRow[] = [
+      { pid: 201, ppid: 100, args: 'node server.js --port 4000' },
+    ];
+
+    expect(
+      commandTargets(tree, "/bin/zsh -lc 'cd app\nnode server.js --port 4000'"),
+    ).toEqual([201]);
+    expect(
+      commandTargets(tree, 'cd app\nnode server.js \\\n  --port 4000'),
+    ).toEqual([201]);
+  });
+
+  it('finds a command written with a trailing comment, which the table never shows', () => {
+    const tree: ProcessRow[] = [
+      { pid: 201, ppid: 100, args: 'node server.js --port 4000' },
+    ];
+
+    expect(
+      commandTargets(tree, 'node server.js --port 4000 # the dev server'),
+    ).toEqual([201]);
+  });
+
+  it('never takes a single command of a script through a process another running command matches', () => {
+    const tree: ProcessRow[] = [
+      { pid: 300, ppid: 100, args: '/bin/sh -c pnpm dev' },
+      { pid: 301, ppid: 300, args: 'node /opt/pnpm dev' },
+    ];
+
+    expect(commandTargets(tree, 'cd web\npnpm dev')).toEqual([300]);
+    expect(commandTargets(tree, 'cd web\npnpm dev', ['pnpm dev'])).toEqual([]);
+    expect(commandTargets(tree, 'pnpm dev', ['cd web\npnpm dev'])).toEqual([
+      300,
+    ]);
+  });
+
+  it('never reads a heredoc as the bare program it feeds, which another command may run too', () => {
+    const tree: ProcessRow[] = [
+      { pid: 400, ppid: 100, args: 'perl -e sleep 9' },
+    ];
+
+    expect(commandTargets(tree, "perl - <<'PL'\nprint 1\nPL")).toEqual([]);
   });
 
   it('matches nothing for a command that is only quoting, or that nothing runs', () => {

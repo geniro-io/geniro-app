@@ -233,6 +233,23 @@ describe('ActionStopService.resolve', () => {
     });
   });
 
+  it('never takes another open shell’s process through one line of a script whose own process is gone', async () => {
+    const { service } = setup({
+      shells: [shellOpen('call-1', 'bg1'), shellOpen('call-2', 'bg2')],
+      calls: [
+        { id: 'call-1', command: SERVER },
+        { id: 'call-2', command: `cd site\n${SERVER}` },
+      ],
+    });
+
+    expect(await service.resolve(RUN, null, { shell: 'bg2' })).toEqual({
+      reason: expect.stringContaining('"bg2" runs no process of this chat'),
+    });
+    expect(await service.resolve(RUN, null, { shell: 'bg1' })).toMatchObject({
+      targets: [{ pid: 12 }],
+    });
+  });
+
   it("reads the command from this member's newest call by that id", async () => {
     const { service } = setup({
       calls: [

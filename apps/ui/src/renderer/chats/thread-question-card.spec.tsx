@@ -419,6 +419,7 @@ describe('a thread question relayed into the manager chat', () => {
             toolName={THREAD_QUESTION_CARD}
             input={{
               ...RELAYED_QUESTION,
+              toolName: 'ask_user_question',
               attachments: [
                 {
                   kind: 'artifact',
@@ -427,7 +428,6 @@ describe('a thread question relayed into the manager chat', () => {
                   version: 1,
                 },
               ],
-              moreAttachments: 0,
             }}
             requestId="relay-1"
             verdict={null}
@@ -567,13 +567,13 @@ describe('a relayed question once settled', () => {
           </ThreadContextReaderContext.Provider>,
         );
       });
-    const attached = {
+    draw({
+      ...RELAYED_QUESTION,
+      toolName: 'ask_user_question',
       attachments: [
         { kind: 'artifact', artifactId: 'plan', title: 'Plan', version: 1 },
       ],
-      moreAttachments: 0,
-    };
-    draw({ ...RELAYED_QUESTION, ...attached });
+    });
     await act(async () => {
       await new Promise((resolve) => {
         setTimeout(resolve, 0);
@@ -613,6 +613,7 @@ describe('a relayed question once settled', () => {
             toolName={THREAD_QUESTION_CARD}
             input={{
               ...RELAYED_QUESTION,
+              toolName: 'ask_user_question',
               attachments: [
                 {
                   kind: 'artifact',
@@ -621,7 +622,6 @@ describe('a relayed question once settled', () => {
                   version: 1,
                 },
               ],
-              moreAttachments: 0,
             }}
             requestId="relay-1"
             verdict={null}
@@ -641,6 +641,53 @@ describe('a relayed question once settled', () => {
     expect(chips).toHaveLength(1);
     expect(chips[0]?.getAttribute('data-state')).toBe('available');
     expect(card().querySelector('iframe')).toBeNull();
+  });
+
+  it('draws no page for a relay its thread asked with another tool, whatever pages it stores', async () => {
+    const reader = stubThreadContextReader(() => Promise.resolve([]), {
+      artifacts: () =>
+        Promise.resolve([
+          {
+            artifactId: 'plan',
+            version: 1,
+            title: 'Plan',
+            summary: null,
+            key: 'k',
+          },
+        ]),
+    });
+    await act(async () => {
+      root.render(
+        <ThreadContextReaderContext.Provider value={reader}>
+          <ApprovalCard
+            toolName={THREAD_QUESTION_CARD}
+            input={{
+              ...RELAYED_QUESTION,
+              toolName: 'AskUserQuestion',
+              attachments: [
+                {
+                  kind: 'artifact',
+                  artifactId: 'plan',
+                  title: 'Plan',
+                  version: 1,
+                },
+              ],
+            }}
+            requestId="relay-1"
+            verdict={null}
+            expired
+            onRespond={vi.fn()}
+          />
+        </ThreadContextReaderContext.Provider>,
+      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    expect(container.textContent).toContain('No longer open');
+    expect(
+      card().querySelectorAll('[data-slot="question-attachment-chip"]'),
+    ).toHaveLength(0);
   });
 
   it('opens the whole card with one press and folds it back with the next', () => {

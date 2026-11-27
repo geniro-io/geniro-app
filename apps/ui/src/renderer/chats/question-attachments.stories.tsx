@@ -29,29 +29,7 @@ const ATTACHED: QuestionAttachmentSet = {
       title: PAGE.title,
       version: PAGE.version,
     },
-    {
-      kind: 'gallery',
-      seq: 12,
-      gallery: {
-        title: 'Strip screenshots',
-        images: [
-          {
-            path: 'shots/strip.png',
-            caption: 'The strip',
-            description: null,
-            source: null,
-          },
-          {
-            path: 'shots/chart.png',
-            caption: null,
-            description: null,
-            source: null,
-          },
-        ],
-      },
-    },
   ],
-  moreAttachments: 2,
 };
 
 function withPages(pages: PublishedArtifact[]) {
@@ -95,7 +73,7 @@ export const Chips: Story = {
 export const ChipsPageGone: Story = {
   args: {
     variant: 'chips',
-    set: { attachments: [ATTACHED.attachments[0]!], moreAttachments: 0 },
+    set: { attachments: [ATTACHED.attachments[0]!] },
   },
   decorators: [withPages([])],
 };

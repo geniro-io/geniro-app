@@ -17,7 +17,11 @@ import {
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { type EgressProxy, startEgressProxy } from './egress-proxy';
+import {
+  type EgressProxy,
+  PROXY_CONNECT_FAILED,
+  startEgressProxy,
+} from './egress-proxy';
 
 const listen = async <T extends HttpServer | TcpServer>(
   server: T,
@@ -286,7 +290,10 @@ describe('egress proxy, over real sockets', () => {
   it('answers 502 to a forwarded request whose target refuses', async () => {
     const port = await closedPort();
 
-    const status = await new Promise<number | undefined>((resolve, reject) => {
+    const answer = await new Promise<{
+      status: number | undefined;
+      reason: string | undefined;
+    }>((resolve, reject) => {
       get(
         {
           host: '127.0.0.1',
@@ -296,12 +303,17 @@ describe('egress proxy, over real sockets', () => {
         },
         (res) => {
           res.resume();
-          res.on('end', () => resolve(res.statusCode));
+          res.on('end', () =>
+            resolve({ status: res.statusCode, reason: res.statusMessage }),
+          );
         },
       ).on('error', reject);
     });
 
-    expect(status).toBe(502);
+    expect(answer).toEqual({
+      status: 502,
+      reason: `${PROXY_CONNECT_FAILED}connect ECONNREFUSED 127.0.0.1:${port}`,
+    });
   });
 
   it('answers 400 to a CONNECT with no port', async () => {

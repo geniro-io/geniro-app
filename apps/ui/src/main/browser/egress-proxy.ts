@@ -35,6 +35,9 @@ const HOP_BY_HOP_HEADERS: ReadonlySet<string> = new Set([
   'upgrade',
 ]);
 
+/** Opens the reason phrase of the 502 the proxy sends when it could not reach a site; the error follows it. */
+export const PROXY_CONNECT_FAILED = 'Proxy could not connect: ';
+
 const BAD_GATEWAY = 'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n';
 const BAD_REQUEST = 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n';
 const TUNNEL_ESTABLISHED = 'HTTP/1.1 200 Connection Established\r\n\r\n';
@@ -227,11 +230,15 @@ function forward(
     answer.on('error', () => res.destroy());
     answer.pipe(res);
   });
-  upstream.once('error', () => {
+  upstream.once('error', (error) => {
     if (res.headersSent) {
       res.destroy();
     } else {
-      refuse(res, 502);
+      refuse(
+        res,
+        502,
+        `${PROXY_CONNECT_FAILED}${error.message.replace(/[^\x20-\x7e]/g, ' ')}`,
+      );
     }
   });
   req.on('error', () => upstream.destroy());
@@ -239,7 +246,7 @@ function forward(
   req.pipe(upstream);
 }
 
-function refuse(res: ServerResponse, status: 400 | 502): void {
-  res.writeHead(status, { Connection: 'close' });
+function refuse(res: ServerResponse, status: 400 | 502, reason?: string): void {
+  res.writeHead(status, reason, { Connection: 'close' });
   res.end();
 }

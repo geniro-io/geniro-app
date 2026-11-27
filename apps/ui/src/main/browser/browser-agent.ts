@@ -28,6 +28,7 @@ import {
   composeSnapshot,
   formatAxTree,
 } from './browser-snapshot';
+import { PROXY_CONNECT_FAILED } from './egress-proxy';
 
 const OP_TIMEOUT_MS = 18_000;
 const LOAD_WAIT_MS = 15_000;
@@ -233,7 +234,9 @@ const UNLOAD_BLOCKED =
 /**
  * Watches the main frame for a committed new document (or a same-document
  * navigation when `sameDocument` allows it) and for a failed load, read here
- * because the error page's `did-finish-load` clears `tab.error` again.
+ * because the error page's `did-finish-load` clears `tab.error` again. A
+ * plain-http site the egress proxy could not reach commits as the proxy's own
+ * 502, so that one counts as a failure.
  */
 function watchNavigation(
   tab: BrowserTab,
@@ -246,8 +249,20 @@ function watchNavigation(
   const contents = tab.view.webContents;
   let committed = false;
   let failure: string | null = null;
-  const onNavigate = (): void => {
-    committed = true;
+  const onNavigate = (
+    _event: unknown,
+    _url: string,
+    httpResponseCode: number,
+    httpStatusText: string,
+  ): void => {
+    if (
+      httpResponseCode === 502 &&
+      httpStatusText.startsWith(PROXY_CONNECT_FAILED)
+    ) {
+      failure = httpStatusText.slice(PROXY_CONNECT_FAILED.length);
+    } else {
+      committed = true;
+    }
   };
   const onInPage = (
     _event: unknown,

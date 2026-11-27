@@ -13,6 +13,7 @@ import {
   type BrowserOp,
 } from './browser-agent-wire';
 import type { BrowserTab, BrowserTabLabelField } from './browser-service';
+import { PROXY_CONNECT_FAILED } from './egress-proxy';
 
 type Handler = (params: Record<string, unknown> | undefined) => unknown;
 
@@ -1199,6 +1200,62 @@ describe('runBrowserAgentRequest navigate', () => {
       id: 'q1',
       ok: false,
       error: 'Could not load http://127.0.0.1:1/x: ERR_CONNECTION_REFUSED',
+    });
+  });
+
+  it('answers a load the browser proxy could not make with its cause', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.getURL = () => 'http://127.0.0.1:59999/';
+        contents.emit(
+          'did-navigate',
+          {},
+          'http://127.0.0.1:59999/',
+          502,
+          `${PROXY_CONNECT_FAILED}connect ECONNREFUSED 127.0.0.1:59999`,
+        );
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'http://127.0.0.1:59999/' }),
+    );
+
+    expect(reply).toEqual({
+      id: 'q1',
+      ok: false,
+      error:
+        'Could not load http://127.0.0.1:59999/: connect ECONNREFUSED 127.0.0.1:59999',
+    });
+  });
+
+  it('counts a server error page of the site itself as navigated', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.getURL = () => 'https://good.test/next';
+        contents.emit(
+          'did-navigate',
+          {},
+          'https://good.test/next',
+          502,
+          'Bad Gateway',
+        );
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }),
+    );
+
+    expect(reply).toMatchObject({
+      ok: true,
+      text: 'Navigated tab t1 to https://good.test/next',
     });
   });
 

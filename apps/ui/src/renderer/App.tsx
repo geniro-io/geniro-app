@@ -344,7 +344,7 @@ export function App(): React.JSX.Element {
     () => (handle ? createDaemonApis(handle) : null),
     [handle],
   );
-  const heldRuns = useHeldRuns(apis);
+  const heldRuns = useHeldRuns(apis, clientRef.current);
   // The app's ONE capabilities read, provided around every view — the whole
   // answer, and the agent identities out of it — so no screen reads it again.
   const capabilities = useCapabilities(apis?.capabilities ?? null);

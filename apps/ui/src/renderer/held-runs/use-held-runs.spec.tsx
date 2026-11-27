@@ -30,8 +30,31 @@ let container: HTMLDivElement;
 let root: Root;
 let latest: HeldRunsController | null;
 
-function Probe({ apis }: { apis: DaemonApis | null }): null {
-  latest = useHeldRuns(apis);
+type StatusListener = (event: { runId: string }) => void;
+
+function fakeClient() {
+  const listeners = new Set<StatusListener>();
+  return {
+    onRunStatus: (listener: StatusListener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    emit: (runId: string) => {
+      for (const listener of listeners) {
+        listener({ runId });
+      }
+    },
+  };
+}
+
+function Probe({
+  apis,
+  client = null,
+}: {
+  apis: DaemonApis | null;
+  client?: ReturnType<typeof fakeClient> | null;
+}): null {
+  latest = useHeldRuns(apis, client as Parameters<typeof useHeldRuns>[1]);
   return null;
 }
 
@@ -139,6 +162,34 @@ describe('useHeldRuns', () => {
     });
 
     expect(latest?.runs).toEqual([OTHER_RUN]);
+  });
+
+  it('drops a run continued elsewhere once its status changes, and closes with the last one', async () => {
+    let held = [RUN, OTHER_RUN];
+    const { apis, teams } = fakeDaemon(() => Promise.resolve({ runs: held }));
+    const client = fakeClient();
+    await act(async () => {
+      root.render(<Probe apis={apis} client={client} />);
+    });
+    expect(latest?.runs).toEqual([RUN, OTHER_RUN]);
+
+    held = [OTHER_RUN];
+    await act(async () => {
+      client.emit('not-held');
+    });
+    expect(teams.listHeldRuns).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      client.emit(RUN.runId);
+    });
+    expect(latest?.runs).toEqual([OTHER_RUN]);
+    expect(latest?.runIds.has(RUN.runId)).toBe(false);
+
+    held = [];
+    await act(async () => {
+      client.emit(OTHER_RUN.runId);
+    });
+    expect(latest?.open).toBe(false);
   });
 
   it('answer posts the ids and closes the dialog', async () => {

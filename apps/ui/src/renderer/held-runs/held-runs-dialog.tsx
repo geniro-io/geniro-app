@@ -57,6 +57,13 @@ function HeldRunsChoice({
   onAnswer: (continueRunIds: string[], declineRunIds: string[]) => void;
 }): React.JSX.Element {
   const [choosing, setChoosing] = React.useState(false);
+  const leftChoosing = React.useRef(false);
+  React.useEffect(() => {
+    if (!choosing && leftChoosing.current) {
+      continueAllRef.current?.focus();
+    }
+    leftChoosing.current = choosing;
+  }, [choosing, continueAllRef]);
   const [unticked, setUnticked] = React.useState<ReadonlySet<string>>(
     () => new Set(),
   );

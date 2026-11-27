@@ -23,7 +23,9 @@ import { folderName } from './directory-select';
 import { formatRelativeTime } from './relative-time';
 import { accountConfigDir } from './run-profile';
 import {
+  awaitingPhrase,
   isWorkingRunStatus,
+  type RowAwaiting,
   RunStatusBadge,
   type RunStatusKind,
 } from './run-status';
@@ -446,6 +448,7 @@ export function ChatHeader({
   configDir = null,
   configDirPin = null,
   status,
+  awaiting = null,
   lastActivityAt,
   workedMs = 0,
   turnCount = 0,
@@ -532,6 +535,8 @@ export function ChatHeader({
    * no daemon row ever carries it.
    */
   status: RunStatusKind;
+  /** What a `needs-input` thread waits on the user for, worded as its sidebar row words it. */
+  awaiting?: RowAwaiting | null;
   lastActivityAt: string;
   /**
    * What this thread has WORKED in total — the sum of its turns, not the span
@@ -634,6 +639,11 @@ export function ChatHeader({
           {label}
         </h2>
         <RunStatusBadge status={status} />
+        {status === 'needs-input' && awaiting !== null ? (
+          <span className="min-w-0 truncate text-xs text-muted-foreground">
+            · {awaitingPhrase(awaiting)}
+          </span>
+        ) : null}
         {analysisSource === null ? null : (
           <Chip asChild interactive data-slot="analysis-source-chip">
             <button

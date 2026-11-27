@@ -142,6 +142,15 @@ describe('HeldRunsDialog', () => {
     expect(button('Continue all')).toBeDefined();
   });
 
+  it('puts the focus back on Continue all after Back, so Enter never declines', () => {
+    renderDialog();
+
+    act(() => button('Choose…')!.click());
+    act(() => button('Back')!.click());
+
+    expect(document.activeElement).toBe(button('Continue all'));
+  });
+
   it('disables Continue selected while no run is ticked', () => {
     renderDialog();
 

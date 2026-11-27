@@ -10859,6 +10859,9 @@ export function Chats({
                           // what this chat asked for, not necessarily what it got.
                           configDirPin={activeRun.configDirPin}
                           status={activeRunStatus}
+                          awaiting={
+                            heldRunIds.has(activeRun.id) ? 'continue' : null
+                          }
                           lastActivityAt={lastActivityOf(activeRun)}
                           workedMs={threadTotalsShown.ms}
                           turnCount={threadTotalsShown.turns}

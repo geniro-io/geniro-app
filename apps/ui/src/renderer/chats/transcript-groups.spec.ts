@@ -4814,6 +4814,43 @@ describe('withLiveText', () => {
     expect(block.status).toBe('completed');
   });
 
+  const heldAfterCrash = (...after: ChatItem[]): CallBlockEntry =>
+    calleeBlock(
+      buildTurnBlocks(
+        groupTranscript([
+          item(
+            'call_started',
+            { callId: 'call-1', calleeNodeId: 'poet', message: 'Write it.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+          item(
+            'status',
+            {
+              status: 'cancelled',
+              callId: 'call-1',
+              continues: true,
+              held: true,
+            },
+            'poet',
+          ),
+          ...after,
+        ]),
+      ),
+    );
+
+  it('reads a call a crash holds for the user as stopped, not working', () => {
+    expect(heldAfterCrash().status).toBe('cancelled');
+  });
+
+  it('reads a held call working again once the user continues it', () => {
+    expect(
+      heldAfterCrash(
+        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+      ).status,
+    ).toBe('running');
+  });
+
   /**
    * A call HELD open by its callee's monitor: the callee's turn ended with no
    * status row, the monitor's output woke the kept process off-turn, and the

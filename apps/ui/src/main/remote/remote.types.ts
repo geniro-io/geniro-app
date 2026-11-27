@@ -47,12 +47,28 @@ export const TUNNEL_URL_WAIT_MS = 45_000;
 export const TUNNEL_CONNECT_WAIT_MS = 5 * 60_000;
 
 /**
- * How long after printing its URL a cloudflared address is withheld, so its
- * name is in DNS first. Measured at 0.7–7.6 s over 20 quick tunnels; a lookup
- * that beats the record is kept as NXDOMAIN by a home router for over a minute,
- * which a reload does not clear.
+ * How often a cloudflared address that has printed its URL is checked for
+ * answering through the public address. Its name reached Cloudflare's
+ * nameservers 0.6–20.3 s after the URL line over five quick tunnels, and the
+ * edge served it within a second after that.
  */
-export const TUNNEL_NAME_SETTLE_MS = 10_000;
+export const TUNNEL_PUBLIC_PROBE_INTERVAL_MS = 1_000;
+
+/** How long one DNS question of that check may take. */
+export const TUNNEL_PUBLIC_DNS_TIMEOUT_MS = 2_000;
+
+/**
+ * How long finding the zone's nameservers may take. Generous: the system's
+ * resolver list can start with servers that never answer (a VPN left
+ * disconnected), each costing a {@link TUNNEL_PUBLIC_DNS_TIMEOUT_MS}.
+ */
+export const TUNNEL_PUBLIC_NAMESERVERS_TIMEOUT_MS = 15_000;
+
+/** How long the request through the public address may take, start to end. */
+export const TUNNEL_PUBLIC_PROBE_TIMEOUT_MS = 4_000;
+
+/** The most of an answer that check reads; the gateway's session answer is far smaller. */
+export const TUNNEL_PUBLIC_ANSWER_MAX_BYTES = 4_096;
 
 /**
  * How many output chunks of a failing tunnel client are kept for its error.

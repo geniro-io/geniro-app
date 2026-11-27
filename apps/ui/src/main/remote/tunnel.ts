@@ -8,11 +8,12 @@ import {
   TUNNEL_EXPIRED_AFTER_MS,
   TUNNEL_EXPIRY_CONFIRM_MS,
   TUNNEL_LIVENESS_POLL_MS,
-  TUNNEL_NAME_SETTLE_MS,
   TUNNEL_OUTPUT_KEPT,
+  TUNNEL_PUBLIC_PROBE_INTERVAL_MS,
   TUNNEL_READY_PROBE_TIMEOUT_MS,
   TUNNEL_URL_WAIT_MS,
 } from './remote.types';
+import { createPublicProbe, tunnelZone } from './tunnel-public-probe';
 
 /**
  * One tunnel client geniro knows how to drive.
@@ -36,8 +37,10 @@ interface TunnelProvider {
   url: RegExp;
   /**
    * For a client that prints its URL before the URL answers: its line for
-   * holding a connection to the provider, with the name settling in DNS on top
-   * ({@link TUNNEL_NAME_SETTLE_MS}). Without one, the URL line means it works.
+   * holding a connection to the provider. Such a client's address is also
+   * checked through the public address until it answers, since a connection
+   * says nothing about the name being in DNS or routed by the edge. Without
+   * one, the URL line means it works.
    */
   connected?: RegExp;
   /** The client's own complaint about why it has no connection yet, group 1. */
@@ -109,6 +112,8 @@ const PROVIDERS: readonly TunnelProvider[] = [
   },
 ];
 
+const WAITING_FOR_ANSWER = 'waiting for the public address to answer';
+
 const OFF: RemoteTunnelState = {
   status: 'off',
   provider: null,
@@ -133,17 +138,31 @@ const OFF: RemoteTunnelState = {
  * `wildcardAdmits` keeps one from being honoured if it is.
  */
 export function tunnelHostPattern(url: string): string | null {
-  let host: string;
-  try {
-    host = new URL(url).hostname.toLowerCase();
-  } catch {
-    return null;
+  const zone = tunnelZone(url);
+  return zone === null ? null : `*.${zone}`;
+}
+
+/** What the tunnel writes to the daemon's log. Never handed the public URL. */
+export type TunnelLog = (
+  level: 'info' | 'warn',
+  message: string,
+  context: Record<string, string>,
+) => void;
+
+const PUBLIC_URL = /https?:\/\/\S+/gi;
+
+/** `text` with every URL, and every bare host in the zone of `seen`, masked. */
+function withoutAddresses(text: string, seen: string | null): string {
+  const masked = text.replace(PUBLIC_URL, '<address>');
+  const zone = seen === null ? null : tunnelZone(seen);
+  if (zone === null) {
+    return masked;
   }
-  const labels = host.split('.');
-  if (labels.length < 3) {
-    return null;
-  }
-  return `*.${labels.slice(1).join('.')}`;
+  const escaped = zone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return masked.replace(
+    new RegExp(`[a-z0-9-]+\\.${escaped}`, 'gi'),
+    '<address>',
+  );
 }
 
 export interface RemoteTunnelOptions {
@@ -154,8 +173,11 @@ export interface RemoteTunnelOptions {
   urlWaitMs?: number;
   /** Test seam for the connect wait; defaults to {@link TUNNEL_CONNECT_WAIT_MS}. */
   connectWaitMs?: number;
-  /** Test seam for the DNS hold; defaults to {@link TUNNEL_NAME_SETTLE_MS}. */
-  nameSettleMs?: number;
+  /** Test seam for the public check's pace; defaults to {@link TUNNEL_PUBLIC_PROBE_INTERVAL_MS}. */
+  publicProbeIntervalMs?: number;
+  /** Test seam for the public check; defaults to a fresh {@link createPublicProbe} per start. */
+  probePublic?: (url: string) => Promise<boolean>;
+  log?: TunnelLog;
   /** Test seam for the liveness poll; defaults to {@link TUNNEL_LIVENESS_POLL_MS}. */
   livenessPollMs?: number;
   /** Test seam for the readiness request; defaults to {@link probeReady}. */
@@ -227,7 +249,13 @@ export class RemoteTunnel {
   private readonly resolveBin: (name: string) => string | null;
   private readonly urlWaitMs: number;
   private readonly connectWaitMs: number;
-  private readonly nameSettleMs: number;
+  private readonly publicProbeIntervalMs: number;
+  private readonly probePublicFn: ((url: string) => Promise<boolean>) | null;
+  private readonly log: TunnelLog;
+  /** The address a starting client printed, admitted by the guard so the public check can reach the gateway. */
+  private pendingUrl: string | null = null;
+  /** The last address the client printed, so a failure's words can be logged without it. */
+  private seenUrl: string | null = null;
   private readonly livenessPollMs: number;
   private readonly probeReadyFn: (url: string) => Promise<boolean>;
   private liveness: ReturnType<typeof setInterval> | null = null;
@@ -237,7 +265,10 @@ export class RemoteTunnel {
     this.resolveBin = options.resolveBin ?? ((name) => resolveBinary(name));
     this.urlWaitMs = options.urlWaitMs ?? TUNNEL_URL_WAIT_MS;
     this.connectWaitMs = options.connectWaitMs ?? TUNNEL_CONNECT_WAIT_MS;
-    this.nameSettleMs = options.nameSettleMs ?? TUNNEL_NAME_SETTLE_MS;
+    this.publicProbeIntervalMs =
+      options.publicProbeIntervalMs ?? TUNNEL_PUBLIC_PROBE_INTERVAL_MS;
+    this.probePublicFn = options.probePublic ?? null;
+    this.log = options.log ?? (() => undefined);
     this.livenessPollMs = options.livenessPollMs ?? TUNNEL_LIVENESS_POLL_MS;
     this.probeReadyFn = options.probeReady ?? probeReady;
   }
@@ -247,18 +278,24 @@ export class RemoteTunnel {
   }
 
   /**
-   * The host pattern the gateway must admit while this tunnel is open, or null.
+   * The hosts the gateway must admit for this tunnel: its zone's pattern while
+   * open, and only the exact address it printed while that address is checked
+   * through the public route.
    *
-   * Gated on `open` rather than answered from the last URL seen, so a tunnel
+   * Answered from the live state rather than the last URL seen, so a tunnel
    * that has been closed stops widening the guard at the moment it closes —
    * a mask left standing would admit a provider's whole zone for the rest of
    * the launch, for no live tunnel at all.
    */
-  allowedHostPattern(): string | null {
-    if (this.current.status !== 'open' || !this.current.url) {
-      return null;
+  allowedHosts(): string[] {
+    if (this.current.status === 'open' && this.current.url) {
+      const pattern = tunnelHostPattern(this.current.url);
+      return pattern ? [pattern] : [];
     }
-    return tunnelHostPattern(this.current.url);
+    if (this.current.status === 'starting' && this.pendingUrl) {
+      return [new URL(this.pendingUrl).hostname.toLowerCase()];
+    }
+    return [];
   }
 
   async start(port: number): Promise<RemoteTunnelState> {
@@ -280,10 +317,16 @@ export class RemoteTunnel {
    */
   async stop(): Promise<RemoteTunnelState> {
     const child = this.child;
+    const provider = this.current.provider;
     this.child = null;
+    this.pendingUrl = null;
     this.current = OFF;
     this.stopLiveness();
     if (child) {
+      this.log('info', 'Public address closed', {
+        source: 'tunnel',
+        provider: provider ?? 'unknown',
+      });
       await reap(child);
     }
     return this.current;
@@ -320,6 +363,12 @@ export class RemoteTunnel {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.child = child;
+    this.seenUrl = null;
+    this.log('info', 'Public address starting', {
+      source: 'tunnel',
+      provider: chosen.id,
+    });
+    const probePublic = this.probePublicFn ?? createPublicProbe();
 
     return new Promise<RemoteTunnelState>((resolve) => {
       // The tail of what the client said, so a failure is reported in its own
@@ -328,17 +377,21 @@ export class RemoteTunnel {
       let settled = false;
       let watching = false;
       let publicUrl: string | null = null;
+      let urlAt: number | null = null;
       let connected = !chosen.connected;
-      let nameSettled = !chosen.connected;
+      let answering = !chosen.connected;
       let complaint: string | null = null;
-      let nameSettle: ReturnType<typeof setTimeout> | undefined;
+      let probeTimer: ReturnType<typeof setTimeout> | undefined;
       const finish = (next: RemoteTunnelState): void => {
         if (settled) {
           return;
         }
         settled = true;
         clearTimeout(timer);
-        clearTimeout(nameSettle);
+        clearTimeout(probeTimer);
+        if (this.child === child) {
+          this.pendingUrl = null;
+        }
         this.current = next;
         resolve(next);
       };
@@ -352,9 +405,24 @@ export class RemoteTunnel {
           this.child !== child ||
           publicUrl === null ||
           !connected ||
-          !nameSettled
+          !answering
         ) {
           return;
+        }
+        if (!settled) {
+          this.log(
+            'info',
+            urlAt === null ? 'Public address open' : 'Public address answers',
+            urlAt === null
+              ? { source: 'tunnel', provider: chosen.id }
+              : {
+                  source: 'tunnel',
+                  provider: chosen.id,
+                  secondsSinceAddress: String(
+                    Math.round((Date.now() - urlAt) / 100) / 10,
+                  ),
+                },
+          );
         }
         this.current = {
           status: 'open',
@@ -368,25 +436,47 @@ export class RemoteTunnel {
 
       const markConnected = (): void => {
         connected = true;
+        if (this.current.status === 'starting' && !answering) {
+          this.current = { ...this.current, detail: WAITING_FOR_ANSWER };
+        }
         openIfServing();
+      };
+
+      const checkPublic = (): void => {
+        if (settled || this.child !== child || publicUrl === null) {
+          return;
+        }
+        void probePublic(publicUrl)
+          .catch(() => false)
+          .then((answers) => {
+            if (settled || this.child !== child) {
+              return;
+            }
+            if (answers) {
+              answering = true;
+              openIfServing();
+              return;
+            }
+            probeTimer = setTimeout(checkPublic, this.publicProbeIntervalMs);
+            probeTimer.unref?.();
+          });
       };
 
       const awaitConnection = (): void => {
         clearTimeout(timer);
+        const minutes = String(Math.round(this.connectWaitMs / 60_000));
         timer = setTimeout(() => {
           fail(
-            `${chosen.label} could not connect within ${String(
-              Math.round(this.connectWaitMs / 60_000),
-            )} minutes: ${complaint ?? 'it reported no error'}`,
+            answering
+              ? `The public address answers, but ${chosen.label} never reported its connection within ${minutes} minutes. Close it and get a new address.`
+              : connected
+                ? `The public address did not answer within ${minutes} minutes, though ${chosen.label} connected. Close it and get a new address.`
+                : `${chosen.label} could not connect within ${minutes} minutes: ${complaint ?? 'it reported no error'}`,
             true,
           );
         }, this.connectWaitMs);
         timer.unref?.();
-        nameSettle = setTimeout(() => {
-          nameSettled = true;
-          openIfServing();
-        }, this.nameSettleMs);
-        nameSettle.unref?.();
+        checkPublic();
       };
 
       const readLine = (line: string): void => {
@@ -415,10 +505,22 @@ export class RemoteTunnel {
         if (!url) {
           return;
         }
-        if (publicUrl === null && chosen.connected) {
+        const first = publicUrl === null;
+        publicUrl = url;
+        this.seenUrl = url;
+        if (chosen.connected && this.current.status === 'starting') {
+          this.pendingUrl = url;
+        }
+        if (first && chosen.connected) {
+          urlAt = Date.now();
+          if (this.current.status === 'starting') {
+            this.current = {
+              ...this.current,
+              detail: complaint ?? WAITING_FOR_ANSWER,
+            };
+          }
           awaitConnection();
         }
-        publicUrl = url;
         openIfServing();
       };
 
@@ -497,7 +599,13 @@ export class RemoteTunnel {
       return;
     }
     this.child = null;
+    this.pendingUrl = null;
     this.stopLiveness();
+    this.log('warn', 'Public address failed', {
+      source: 'tunnel',
+      provider: provider.id,
+      reason: withoutAddresses(error, this.seenUrl),
+    });
     this.current = {
       status: 'error',
       provider: provider.id,

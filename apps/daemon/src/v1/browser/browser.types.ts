@@ -57,7 +57,7 @@ export type BrowserOp =
       color?: BrowserTabColor;
     }
   | { kind: 'label'; tab: string; name?: string; color?: BrowserTabColor }
-  | { kind: 'navigate'; tab: string; url: string }
+  | { kind: 'navigate'; tab: string; url: string; force?: boolean }
   | { kind: 'snapshot'; tab: string; interactive: boolean; text: boolean }
   | { kind: 'click'; tab: string; ref: string }
   | { kind: 'type'; tab: string; ref: string; text: string; submit: boolean }

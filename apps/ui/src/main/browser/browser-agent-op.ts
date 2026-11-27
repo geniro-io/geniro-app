@@ -20,6 +20,9 @@ export class AgentOp {
   readonly memberName: string;
   blockedHost: string | null = null;
   authBlocked = false;
+  /** Set when the page's beforeunload guard kept it. */
+  unloadBlocked = false;
+  leavesGuardedPage = false;
   private readonly allowed: ReadonlySet<string> | null;
   private readonly controller = new AbortController();
   private onEnd: (() => void) | null = null;

@@ -92,6 +92,9 @@ interface ChatBrowser {
   userHosts: Set<string>;
 }
 
+/** Chromium's ERR_ABORTED: a navigation cancelled before it committed, by a new one or a beforeunload guard. */
+export const NAVIGATION_ABORTED = -3;
+
 export interface BrowserServiceOptions {
   proxyPort: number;
   /** Resolves once the launch sweep of orphaned jars is done; no session is made before. */
@@ -340,6 +343,12 @@ export class BrowserService {
     this.emitRun(tab.runId);
   }
 
+  reload(tab: BrowserTab): void {
+    tab.error = null;
+    tab.view.webContents.reload();
+    this.emitRun(tab.runId);
+  }
+
   navigate(runId: string, tabId: string, input: string): void {
     const tab = this.requireTab(runId, tabId);
     const url = resolveAddress(input);
@@ -368,8 +377,8 @@ export class BrowserService {
     } else if (action === 'forward') {
       contents.navigationHistory.goForward();
     } else if (action === 'reload') {
-      tab.error = null;
-      contents.reload();
+      this.reload(tab);
+      return;
     } else {
       contents.stop();
     }
@@ -935,7 +944,7 @@ export class BrowserService {
         url: string,
         isMainFrame: boolean,
       ) => {
-        if (!isMainFrame || code === -3) {
+        if (!isMainFrame || code === NAVIGATION_ABORTED) {
           return;
         }
         tab.error = {
@@ -973,8 +982,14 @@ export class BrowserService {
     contents.on('will-redirect', guard);
     contents.on('will-frame-navigate', guard);
     contents.on('will-prevent-unload', (event) => {
-      if (tab.op === null && this.userLeavesPage(tab)) {
+      if (tab.op === null) {
+        if (this.userLeavesPage(tab)) {
+          event.preventDefault();
+        }
+      } else if (tab.op.leavesGuardedPage) {
         event.preventDefault();
+      } else {
+        tab.op.unloadBlocked = true;
       }
     });
     contents.on('login', (event, _details, authInfo, callback) => {

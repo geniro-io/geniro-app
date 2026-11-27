@@ -13,6 +13,7 @@ import {
   type BrowserOp,
 } from './browser-agent-wire';
 import type { BrowserTab, BrowserTabLabelField } from './browser-service';
+import { PROXY_CONNECT_FAILED } from './egress-proxy';
 
 type Handler = (params: Record<string, unknown> | undefined) => unknown;
 
@@ -31,11 +32,16 @@ class FakeDebugger extends EventEmitter {
 
 interface Rig {
   debug: FakeDebugger;
-  contents: EventEmitter & { getURL(): string; getTitle(): string };
+  contents: EventEmitter & {
+    getURL(): string;
+    getTitle(): string;
+    isLoading(): boolean;
+  };
   tab: BrowserTab;
   host: BrowserAgentHost;
   cookies: Electron.Cookie[];
   loadUrl: ReturnType<typeof vi.fn>;
+  reload: ReturnType<typeof vi.fn>;
   userHosts: string[];
   labelTab: ReturnType<typeof vi.fn<() => BrowserTabLabelField[]>>;
 }
@@ -76,6 +82,7 @@ function rig(): Rig {
     view: { webContents: contents },
   } as unknown as BrowserTab;
   const loadUrl = vi.fn();
+  const reload = vi.fn();
   const labelTab = vi.fn((): BrowserTabLabelField[] => []);
   const userHosts: string[] = [];
   const host: BrowserAgentHost = {
@@ -86,6 +93,7 @@ function rig(): Rig {
     chatSession: async () => session as never,
     openTab: vi.fn(),
     loadUrl,
+    reload,
     closeTab: vi.fn(async () => undefined),
     labelTab,
     attachAgentOp: (target: BrowserTab, op: AgentOp) => {
@@ -95,7 +103,17 @@ function rig(): Rig {
       });
     },
   };
-  return { debug, contents, tab, host, cookies, loadUrl, userHosts, labelTab };
+  return {
+    debug,
+    contents,
+    tab,
+    host,
+    cookies,
+    loadUrl,
+    reload,
+    userHosts,
+    labelTab,
+  };
 }
 
 const request = (
@@ -190,7 +208,7 @@ describe('runBrowserAgentRequest', () => {
 
     const reply = await runBrowserAgentRequest(
       host,
-      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/' }, [
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }, [
         'good.test',
       ]),
     );
@@ -209,13 +227,15 @@ describe('runBrowserAgentRequest', () => {
     loadUrl.mockImplementation((tab: BrowserTab) => {
       setTimeout(() => {
         allowed = tab.op?.permitsNavigation('https://other.test/');
+        contents.getURL = () => 'https://good.test/next';
+        contents.emit('did-navigate', {}, 'https://good.test/next', 200, 'OK');
         contents.emit('did-stop-loading');
       }, 0);
     });
 
     const reply = await runBrowserAgentRequest(
       host,
-      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/' }),
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }),
     );
 
     expect(reply).toMatchObject({ ok: true });
@@ -970,5 +990,459 @@ describe('runBrowserAgentRequest', () => {
       error: 'No tab t9 in this chat — call browser_tabs',
     });
     expect(malformed).toMatchObject({ id: 'q2', ok: false });
+  });
+});
+
+describe('runBrowserAgentRequest navigate', () => {
+  const GUARDED =
+    'The page did not navigate: its beforeunload handler blocked leaving (an unsaved-changes guard). Dismiss the unsaved state, or pass force: true.';
+
+  const commits = (contents: Rig['contents'], url: string): void => {
+    contents.getURL = () => url;
+    contents.emit('did-navigate', {}, url, 200, 'OK');
+    contents.emit('did-stop-loading');
+  };
+
+  const guardKeepsPage = (
+    contents: Rig['contents'],
+    tab: BrowserTab,
+    url: string,
+  ): void => {
+    if (tab.op !== null) {
+      tab.op.unloadBlocked = true;
+    }
+    contents.emit('did-fail-load', {}, -3, 'ERR_ABORTED', url, true);
+    contents.emit('did-stop-loading');
+  };
+
+  it('answers that the page stayed when its beforeunload guard kept it', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation((tab: BrowserTab) => {
+      setTimeout(
+        () => guardKeepsPage(contents, tab, 'https://good.test/next'),
+        0,
+      );
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }),
+    );
+
+    expect(reply).toEqual({ id: 'q1', ok: false, error: GUARDED });
+  });
+
+  it('answers that the page stayed when no navigation committed', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => contents.emit('did-stop-loading'), 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }),
+    );
+
+    expect(reply).toEqual({
+      id: 'q1',
+      ok: false,
+      error:
+        'The page did not navigate: tab t1 still shows https://good.test/.',
+    });
+  });
+
+  it('answers navigated once the new document commits', async () => {
+    const { host, loadUrl, reload, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => commits(contents, 'https://good.test/next'), 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }),
+    );
+
+    expect(reply).toMatchObject({
+      ok: true,
+      text: 'Navigated tab t1 to https://good.test/next',
+    });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('counts a same-document navigation to another address', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.getURL = () => 'https://good.test/#settings';
+        contents.emit(
+          'did-navigate-in-page',
+          {},
+          'https://good.test/#settings',
+          true,
+        );
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({
+        kind: 'navigate',
+        tab: 't1',
+        url: 'https://good.test/#settings',
+      }),
+    );
+
+    expect(reply).toMatchObject({ ok: true });
+  });
+
+  it('ignores a same-document navigation inside a frame', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.emit('did-navigate-in-page', {}, 'https://ads.test/#x', false);
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({
+        kind: 'navigate',
+        tab: 't1',
+        url: 'https://good.test/#settings',
+      }),
+    );
+
+    expect(reply).toMatchObject({ ok: false });
+  });
+
+  it('reloads the tab when asked for the address it already shows', async () => {
+    const { host, loadUrl, reload, contents } = rig();
+    contents.getURL = () => 'https://good.test/app#/folders';
+    reload.mockImplementation(() => {
+      setTimeout(() => commits(contents, 'https://good.test/app#/folders'), 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({
+        kind: 'navigate',
+        tab: 't1',
+        url: 'https://good.test/app#/folders',
+      }),
+    );
+
+    expect(reload).toHaveBeenCalledOnce();
+    expect(loadUrl).not.toHaveBeenCalled();
+    expect(reply).toMatchObject({
+      ok: true,
+      text: 'Reloaded tab t1 at https://good.test/app#/folders',
+    });
+  });
+
+  it('does not take a same-document navigation for a reload', async () => {
+    const { host, reload, contents } = rig();
+    reload.mockImplementation(() => {
+      setTimeout(() => {
+        contents.emit('did-navigate-in-page', {}, 'https://good.test/', true);
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/' }),
+    );
+
+    expect(reply).toMatchObject({ ok: false });
+  });
+
+  it('answers that a guarded page was not reloaded', async () => {
+    const { host, reload, contents } = rig();
+    reload.mockImplementation((tab: BrowserTab) => {
+      setTimeout(() => guardKeepsPage(contents, tab, 'https://good.test/'), 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/' }),
+    );
+
+    expect(reply).toEqual({ id: 'q1', ok: false, error: GUARDED });
+  });
+
+  it('answers a load that failed with its cause, as Electron reports it before the error page finishes', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.emit('did-start-loading');
+        contents.emit(
+          'did-fail-load',
+          {},
+          -102,
+          'ERR_CONNECTION_REFUSED',
+          'http://127.0.0.1:1/x',
+          true,
+        );
+        contents.getURL = () => 'http://127.0.0.1:1/x';
+        contents.emit('did-finish-load');
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'http://127.0.0.1:1/x' }),
+    );
+
+    expect(reply).toEqual({
+      id: 'q1',
+      ok: false,
+      error: 'Could not load http://127.0.0.1:1/x: ERR_CONNECTION_REFUSED',
+    });
+  });
+
+  it('answers a load the browser proxy could not make with its cause', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.getURL = () => 'http://127.0.0.1:59999/';
+        contents.emit(
+          'did-navigate',
+          {},
+          'http://127.0.0.1:59999/',
+          502,
+          `${PROXY_CONNECT_FAILED}connect ECONNREFUSED 127.0.0.1:59999`,
+        );
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'http://127.0.0.1:59999/' }),
+    );
+
+    expect(reply).toEqual({
+      id: 'q1',
+      ok: false,
+      error:
+        'Could not load http://127.0.0.1:59999/: connect ECONNREFUSED 127.0.0.1:59999',
+    });
+  });
+
+  it('counts a server error page of the site itself as navigated', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.getURL = () => 'https://good.test/next';
+        contents.emit(
+          'did-navigate',
+          {},
+          'https://good.test/next',
+          502,
+          'Bad Gateway',
+        );
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }),
+    );
+
+    expect(reply).toMatchObject({
+      ok: true,
+      text: 'Navigated tab t1 to https://good.test/next',
+    });
+  });
+
+  it('answers a reload that failed with its cause', async () => {
+    const { host, reload, contents } = rig();
+    reload.mockImplementation(() => {
+      setTimeout(() => {
+        contents.emit(
+          'did-fail-load',
+          {},
+          -102,
+          'ERR_CONNECTION_REFUSED',
+          'https://good.test/',
+          true,
+        );
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/' }),
+    );
+
+    expect(reply).toMatchObject({
+      ok: false,
+      error: 'Could not load https://good.test/: ERR_CONNECTION_REFUSED',
+    });
+  });
+
+  it('never says the old page stayed once the tab has left it', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.getURL = () => 'http://127.0.0.1:1/x';
+        contents.emit('did-stop-loading');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'http://127.0.0.1:1/x' }),
+    );
+
+    expect(reply).toEqual({
+      id: 'q1',
+      ok: false,
+      error:
+        'Could not load http://127.0.0.1:1/x: the tab shows an error page instead.',
+    });
+  });
+
+  it('ignores a frame that failed to load inside a page that committed', async () => {
+    const { host, loadUrl, contents } = rig();
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.emit(
+          'did-fail-load',
+          {},
+          -105,
+          'ERR_NAME_NOT_RESOLVED',
+          'https://ads.test/',
+          false,
+        );
+        commits(contents, 'https://good.test/next');
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }),
+    );
+
+    expect(reply).toMatchObject({ ok: true });
+  });
+
+  it('takes an address written without its trailing slash for the one the tab shows', async () => {
+    const { host, loadUrl, reload, contents } = rig();
+    reload.mockImplementation(() => {
+      setTimeout(() => commits(contents, 'https://good.test/'), 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://GOOD.test' }),
+    );
+
+    expect(reload).toHaveBeenCalledOnce();
+    expect(loadUrl).not.toHaveBeenCalled();
+    expect(reply).toMatchObject({ ok: true });
+  });
+
+  it('keeps waiting past the end of a load that was already running', async () => {
+    const { host, loadUrl, contents } = rig();
+    let loading = true;
+    contents.isLoading = () => loading;
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => {
+        contents.emit('did-stop-loading');
+        setTimeout(() => {
+          loading = false;
+          commits(contents, 'https://good.test/next');
+        }, 0);
+      }, 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }),
+    );
+
+    expect(reply).toMatchObject({
+      ok: true,
+      text: 'Navigated tab t1 to https://good.test/next',
+    });
+  });
+
+  it('says the new page did not load in time when nothing committed', async () => {
+    vi.useFakeTimers();
+    try {
+      const { host, loadUrl, contents } = rig();
+      contents.isLoading = () => true;
+      loadUrl.mockImplementation(() => undefined);
+
+      const pending = runBrowserAgentRequest(
+        host,
+        request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }),
+      );
+      await vi.advanceTimersByTimeAsync(16_000);
+
+      expect(await pending).toEqual({
+        id: 'q1',
+        ok: false,
+        error:
+          'The page did not load in time: tab t1 is still loading https://good.test/next.',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reloads a guarded page when force is passed', async () => {
+    const { host, reload, contents } = rig();
+    let leaves: boolean | undefined;
+    reload.mockImplementation((tab: BrowserTab) => {
+      leaves = tab.op?.leavesGuardedPage;
+      setTimeout(() => commits(contents, 'https://good.test/'), 0);
+    });
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({
+        kind: 'navigate',
+        tab: 't1',
+        url: 'https://good.test/',
+        force: true,
+      }),
+    );
+
+    expect(leaves).toBe(true);
+    expect(reply).toMatchObject({ ok: true });
+  });
+
+  it('leaves a guarded page only when force is passed', async () => {
+    const { host, loadUrl, contents } = rig();
+    const leaves: (boolean | undefined)[] = [];
+    loadUrl.mockImplementation((tab: BrowserTab) => {
+      leaves.push(tab.op?.leavesGuardedPage);
+      setTimeout(() => commits(contents, 'https://good.test/next'), 0);
+    });
+
+    const forced = await runBrowserAgentRequest(
+      host,
+      request({
+        kind: 'navigate',
+        tab: 't1',
+        url: 'https://good.test/next',
+        force: true,
+      }),
+    );
+    contents.getURL = () => 'https://good.test/';
+    await runBrowserAgentRequest(
+      host,
+      request({ kind: 'navigate', tab: 't1', url: 'https://good.test/next' }),
+    );
+
+    expect(forced).toMatchObject({ ok: true });
+    expect(leaves).toEqual([true, false]);
   });
 });

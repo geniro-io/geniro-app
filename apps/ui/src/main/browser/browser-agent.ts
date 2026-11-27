@@ -18,6 +18,7 @@ import {
   type BrowserTab,
   type BrowserTabLabelField,
   isWebUrl,
+  NAVIGATION_ABORTED,
   type OpenTabOptions,
 } from './browser-service';
 import {
@@ -27,6 +28,7 @@ import {
   composeSnapshot,
   formatAxTree,
 } from './browser-snapshot';
+import { PROXY_CONNECT_FAILED } from './egress-proxy';
 
 const OP_TIMEOUT_MS = 18_000;
 const LOAD_WAIT_MS = 15_000;
@@ -54,6 +56,7 @@ export interface BrowserAgentHost {
     options?: OpenTabOptions,
   ): Promise<string>;
   loadUrl(tab: BrowserTab, url: string): void;
+  reload(tab: BrowserTab): void;
   closeTab(runId: string, tabId: string): Promise<void>;
   attachAgentOp(tab: BrowserTab, op: AgentOp): void;
   labelTab(
@@ -223,6 +226,138 @@ function waitForLoad(tab: BrowserTab, ms: number): Promise<void> {
     const timer = setTimeout(done, ms);
     contents.on('did-stop-loading', done);
   });
+}
+
+const UNLOAD_BLOCKED =
+  'The page did not navigate: its beforeunload handler blocked leaving (an unsaved-changes guard). Dismiss the unsaved state, or pass force: true.';
+
+/**
+ * Watches the main frame for a committed new document (or a same-document
+ * navigation when `sameDocument` allows it) and for a failed load, read here
+ * because the error page's `did-finish-load` clears `tab.error` again. A
+ * plain-http site the egress proxy could not reach commits as the proxy's own
+ * 502, so that one counts as a failure.
+ */
+function watchNavigation(
+  tab: BrowserTab,
+  sameDocument: boolean,
+): {
+  committed: () => boolean;
+  failure: () => string | null;
+  stop: () => void;
+} {
+  const contents = tab.view.webContents;
+  let committed = false;
+  let failure: string | null = null;
+  const onNavigate = (
+    _event: unknown,
+    _url: string,
+    httpResponseCode: number,
+    httpStatusText: string,
+  ): void => {
+    if (
+      httpResponseCode === 502 &&
+      httpStatusText.startsWith(PROXY_CONNECT_FAILED)
+    ) {
+      failure = httpStatusText.slice(PROXY_CONNECT_FAILED.length);
+    } else {
+      committed = true;
+    }
+  };
+  const onInPage = (
+    _event: unknown,
+    _url: string,
+    isMainFrame: boolean,
+  ): void => {
+    if (sameDocument && isMainFrame) {
+      committed = true;
+    }
+  };
+  const onFail = (
+    _event: unknown,
+    code: number,
+    description: string,
+    _url: string,
+    isMainFrame: boolean,
+  ): void => {
+    if (isMainFrame && code !== NAVIGATION_ABORTED) {
+      failure = description;
+    }
+  };
+  contents.on('did-navigate', onNavigate);
+  contents.on('did-navigate-in-page', onInPage);
+  contents.on('did-fail-load', onFail);
+  return {
+    committed: () => committed,
+    failure: () => failure,
+    stop: () => {
+      contents.removeListener('did-navigate', onNavigate);
+      contents.removeListener('did-navigate-in-page', onInPage);
+      contents.removeListener('did-fail-load', onFail);
+    },
+  };
+}
+
+async function navigateTab(
+  ctx: Ctx,
+  url: string,
+  force: boolean,
+): Promise<Done> {
+  const contents = ctx.tab.view.webContents;
+  const before = contents.getURL();
+  const reload = before === url;
+  ctx.op.leavesGuardedPage = force;
+  const commit = watchNavigation(ctx.tab, !reload);
+  const deadline = Date.now() + LOAD_WAIT_MS;
+  try {
+    const loaded = waitForLoad(ctx.tab, LOAD_WAIT_MS);
+    if (reload) {
+      ctx.host.reload(ctx.tab);
+    } else {
+      ctx.host.loadUrl(ctx.tab, url);
+    }
+    await loaded;
+    while (
+      !commit.committed() &&
+      commit.failure() === null &&
+      !ctx.op.unloadBlocked &&
+      contents.isLoading() &&
+      Date.now() < deadline
+    ) {
+      await waitForLoad(ctx.tab, deadline - Date.now());
+    }
+  } finally {
+    commit.stop();
+  }
+  checkOp(ctx.op);
+  const failure = commit.failure() ?? ctx.tab.error?.description ?? null;
+  if (failure !== null) {
+    throw new AgentError(`Could not load ${url}: ${failure}`);
+  }
+  if (!commit.committed()) {
+    if (ctx.op.unloadBlocked) {
+      throw new AgentError(UNLOAD_BLOCKED);
+    }
+    if (contents.isLoading()) {
+      throw new AgentError(
+        `The page did not load in time: tab ${ctx.tab.id} is still loading ${url}.`,
+      );
+    }
+    if (contents.getURL() !== before) {
+      throw new AgentError(
+        `Could not load ${url}: the tab shows an error page instead.`,
+      );
+    }
+    throw new AgentError(
+      `The page did not navigate: tab ${ctx.tab.id} still shows ${before}.`,
+    );
+  }
+  const shown = contents.getURL() || url;
+  return {
+    text: reload
+      ? `Reloaded tab ${ctx.tab.id} at ${shown}`
+      : `Navigated tab ${ctx.tab.id} to ${shown}`,
+  };
 }
 
 function checkOp(op: AgentOp): void {
@@ -959,21 +1094,7 @@ async function execute(
         req,
         op.tab,
         [new URL(url).hostname],
-        async (ctx) => {
-          const loaded = waitForLoad(ctx.tab, LOAD_WAIT_MS);
-          host.loadUrl(ctx.tab, url);
-          await loaded;
-          checkOp(ctx.op);
-          if (ctx.tab.error !== null) {
-            throw new AgentError(
-              `Could not load ${url}: ${ctx.tab.error.description}`,
-            );
-          }
-          const contents = ctx.tab.view.webContents;
-          return {
-            text: `Navigated tab ${ctx.tab.id} to ${contents.getURL() || url}`,
-          };
-        },
+        (ctx) => navigateTab(ctx, url, op.force === true),
         false,
       );
     }

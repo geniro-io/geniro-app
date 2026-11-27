@@ -64,6 +64,7 @@ export const browserOpSchema = z.discriminatedUnion('kind', [
     kind: z.literal('navigate'),
     tab,
     url: z.string().min(1).max(8192),
+    force: z.boolean().optional(),
   }),
   z.strictObject({
     kind: z.literal('snapshot'),

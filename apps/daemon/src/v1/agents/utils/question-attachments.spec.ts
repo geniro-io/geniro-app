@@ -162,6 +162,18 @@ describe('questionAttachmentsOf', () => {
   });
 });
 
+describe('questionAttachmentsOf — empty picture sets', () => {
+  it('never attaches a picture set with no pictures, named or shown', () => {
+    const fields = questionAttachmentsOf({
+      ...none,
+      text: 'Which of the logo drafts?',
+      galleries: [gallery(5, 'Logo drafts', 0)],
+      turn: [{ gallerySeq: 5 }],
+    });
+    expect(fields.attachments).toEqual([]);
+  });
+});
+
 describe('questionCardText', () => {
   it('reads the title and every question, header and option word', () => {
     expect(

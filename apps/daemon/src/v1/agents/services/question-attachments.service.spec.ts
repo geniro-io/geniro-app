@@ -222,4 +222,15 @@ describe('QuestionAttachmentsService (in-memory sqlite)', () => {
       published: ['chart-page', 'plan-page'],
     });
   });
+
+  it('leaves the page ids unchecked rather than refusing the question when the pages cannot be read', async () => {
+    vi.spyOn(artifacts, 'read').mockRejectedValueOnce(
+      new Error('the page listing is gone'),
+    );
+
+    await expect(service.unknownPages(RUN, ['ghost-page'])).resolves.toEqual({
+      unknown: [],
+      published: [],
+    });
+  });
 });

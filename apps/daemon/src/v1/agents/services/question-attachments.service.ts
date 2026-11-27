@@ -100,9 +100,17 @@ export class QuestionAttachmentsService {
     runId: string,
     ids: readonly string[],
   ): Promise<{ unknown: string[]; published: string[] }> {
-    const published = (await this.artifacts.read(runId)).artifacts.map(
-      (page) => page.artifactId,
-    );
+    let published: string[];
+    try {
+      published = (await this.artifacts.read(runId)).artifacts.map(
+        (page) => page.artifactId,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `run ${runId}: its pages could not be read — the question's page ids go unchecked: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { unknown: [], published: [] };
+    }
     return {
       unknown: ids.filter((id) => !published.includes(id)),
       published,

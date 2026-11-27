@@ -6,7 +6,8 @@ export function askUserQuestionInstructions(answeringACall: boolean): string {
     'anything where guessing wrong would waste the work. Do NOT use it for questions you can answer from the code, ' +
     'and never to check in on something already decided. ' +
     (answeringACall
-      ? 'You are answering a call, so the question goes to the agent that called you, which answers it or puts it to the user. '
+      ? 'You are answering a call, so the question goes to the agent that called you, which answers it or puts it to the user; ' +
+        'it reads the question’s words alone, so name any page it is about in them. '
       : '') +
     'When the question is about a page you published with show_artifact, pass its artifact_id in artifacts (at most three; ' +
     'an id this thread never published refuses the call), or name the page by its exact title in the question: the card shows the page beside it. ' +

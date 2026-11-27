@@ -794,9 +794,24 @@
   }
 }
 
-/* Unlayered, so it beats the `animate-spin` shorthand's linear timing. */
-.spinner-stepped {
-  animation-timing-function: steps(8);
+.spinner-frames {
+  background-color: currentColor;
+  mask: url('../assets/spinner-frames.webp') center / contain no-repeat;
+}
+
+.spinner-frames > svg {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner-frames {
+    background-color: transparent;
+    mask: none;
+  }
+
+  .spinner-frames > svg {
+    visibility: visible;
+  }
 }
 
 /* The command center's graph: a node's entrance and a shown card's flash, each played once. */

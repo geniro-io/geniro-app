@@ -475,7 +475,7 @@ describe('ThreadCard — working', () => {
     const working = render({ attention: 'working' });
     expect(
       working.querySelector(
-        '[data-slot="thread-card-head"] [data-slot="spinner"].spinner-stepped',
+        '[data-slot="thread-card-head"] [data-slot="spinner"].spinner-frames',
       ),
     ).not.toBeNull();
     expect(working.className).not.toMatch(/cc-running-border|cc-breathe/);

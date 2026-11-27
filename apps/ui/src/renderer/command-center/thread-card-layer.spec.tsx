@@ -320,7 +320,7 @@ describe('ThreadCardLayer — the cards over the canvas', () => {
       )!;
     const loaderOf = (runId: string): Element | null =>
       cardOf(runId).querySelector(
-        '[data-slot="thread-canvas-card-head"] [data-slot="spinner"].spinner-stepped',
+        '[data-slot="thread-canvas-card-head"] [data-slot="spinner"].spinner-frames',
       );
     expect(loaderOf('a')).not.toBeNull();
     expect(loaderOf('b')).toBeNull();

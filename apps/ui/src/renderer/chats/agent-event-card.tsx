@@ -197,7 +197,14 @@ export function EventLine({
 }): React.JSX.Element {
   const Icon = icon;
   return (
-    <p className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
+    <p
+      className={cn(
+        'min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground',
+        // Text tracks grow in equal shares: a short heading stays whole, a long one leaves the label half.
+        labelGivesWay
+          ? 'grid grid-flow-col grid-cols-[max-content] auto-cols-[minmax(0,max-content)]'
+          : 'flex',
+      )}>
       <Icon
         aria-hidden="true"
         className={cn('size-3.5 shrink-0', ICON_TONE[tone])}
@@ -207,7 +214,7 @@ export function EventLine({
         title={labelGivesWay ? label : undefined}
         className={cn(
           'font-medium',
-          labelGivesWay ? 'min-w-0 shrink-[9999] truncate' : 'shrink-0',
+          labelGivesWay ? 'min-w-0 truncate' : 'shrink-0',
         )}>
         {label}
       </span>

@@ -44,40 +44,48 @@ function FinishedLine({
     <li
       data-slot="pinned-finished-line"
       data-run={line.runId}
-      className="flex min-w-0 items-center gap-1.5 py-1 text-xs">
+      className="flex min-w-0 flex-wrap items-center gap-x-1.5 py-1 text-xs">
       <span
-        title={line.title}
-        className="min-w-0 flex-1 truncate font-medium text-foreground">
-        {line.title}
-      </span>
-      <span className="shrink-0 text-muted-foreground">finished</span>
-      {open === null ? null : (
-        <ThreadActionButton
-          slot="pinned-finished-open"
-          label={`Open ${line.title}`}
-          title="Open this thread's chat"
-          icon={<MessageSquare aria-hidden="true" />}
-          onClick={() => open(line.runId)}>
-          Open chat
-        </ThreadActionButton>
-      )}
-      {archive === null ? null : (
-        <ArchiveThreadButton
-          slot="pinned-finished-archive"
+        data-slot="pinned-finished-name"
+        className="flex min-w-[min(100%,12rem)] flex-1 basis-0 items-center gap-1.5">
+        <span
           title={line.title}
-          onArchive={archive}
-        />
-      )}
-      {dismissals === null ? null : (
-        <ThreadActionButton
-          slot="pinned-finished-dismiss"
-          label={`Dismiss ${line.title}`}
-          title="Remove this finished thread on every device; its next finish brings it back"
-          icon={<X aria-hidden="true" />}
-          onClick={() => dismissals.dismiss(line.runId, null)}>
-          Dismiss
-        </ThreadActionButton>
-      )}
+          className="min-w-0 truncate font-medium text-foreground">
+          {line.title}
+        </span>
+        <span className="shrink-0 text-muted-foreground">finished</span>
+      </span>
+      <span
+        data-slot="pinned-finished-actions"
+        className="ml-auto flex shrink-0 items-center gap-1.5">
+        {open === null ? null : (
+          <ThreadActionButton
+            slot="pinned-finished-open"
+            label={`Open ${line.title}`}
+            title="Open this thread's chat"
+            icon={<MessageSquare aria-hidden="true" />}
+            onClick={() => open(line.runId)}>
+            Open chat
+          </ThreadActionButton>
+        )}
+        {archive === null ? null : (
+          <ArchiveThreadButton
+            slot="pinned-finished-archive"
+            title={line.title}
+            onArchive={archive}
+          />
+        )}
+        {dismissals === null ? null : (
+          <ThreadActionButton
+            slot="pinned-finished-dismiss"
+            label={`Dismiss ${line.title}`}
+            title="Remove this finished thread on every device; its next finish brings it back"
+            icon={<X aria-hidden="true" />}
+            onClick={() => dismissals.dismiss(line.runId, null)}>
+            Dismiss
+          </ThreadActionButton>
+        )}
+      </span>
     </li>
   );
 }

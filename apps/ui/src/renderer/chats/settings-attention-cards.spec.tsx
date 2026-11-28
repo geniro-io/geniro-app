@@ -561,7 +561,7 @@ describe('SettingsNoticeCard', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it('cuts the card label before its heading on a narrow line', async () => {
+  it('shares a narrow line between the card label and its heading, each cut to its share', async () => {
     findings = [finding('f1'), finding('f2')];
     await draw();
 
@@ -570,8 +570,15 @@ describe('SettingsNoticeCard', () => {
     const heading = card?.querySelector(
       '[data-slot="settings-attention-member"]',
     );
-    expect(label?.classList.contains('shrink-[9999]')).toBe(true);
+    const line = label?.parentElement;
+    expect(line?.classList.contains('grid')).toBe(true);
+    expect(line?.classList.contains('grid-cols-[max-content]')).toBe(true);
+    expect(line?.classList.contains('auto-cols-[minmax(0,max-content)]')).toBe(
+      true,
+    );
+    expect(label?.classList.contains('shrink-[9999]')).toBe(false);
     expect(label?.classList.contains('truncate')).toBe(true);
+    expect(heading?.classList.contains('truncate')).toBe(true);
     expect(label?.getAttribute('title')).toBe('Waiting for your decision');
     expect(heading?.classList.contains('shrink-0')).toBe(false);
   });

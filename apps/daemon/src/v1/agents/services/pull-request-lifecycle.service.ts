@@ -95,8 +95,8 @@ export function failureOf(
 
 /**
  * A pull request's life on GitHub, read through the user's own `gh` for an
- * analysis of the runs that recorded it (root `AGENTS.md` → Constraints,
- * item 1): one GraphQL query for its timeline, review threads and
+ * analysis of the runs that recorded it
+ * (`.claude/rules/network-constraints.md`, item 1): one GraphQL query for its timeline, review threads and
  * changes-requested reviews, and its branch's Actions runs, which keep every
  * push a later rebase rewrote away. Never stored: kept in memory per pull
  * request with the head sha it was read at — a merged or closed one for the

@@ -106,5 +106,6 @@ file at the start of each run and at every phase-boundary refresh via
 
 ## Constraints
 
-Hard local-first / security rules are stated once, in full, in AGENTS.md →
-*Constraints (local-first & security)* — read that section rather than this one.
+Hard local-first / security rules are stated once: in AGENTS.md →
+*Constraints (local-first & security)*, and in full in
+`.claude/rules/network-constraints.md` — read those rather than this one.

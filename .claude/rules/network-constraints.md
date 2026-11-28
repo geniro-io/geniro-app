@@ -1,0 +1,105 @@
+---
+description: Local-first network constraints: the nine kinds of outbound call geniro allows, the LAN gateway and the public tunnel, each with its limits
+paths:
+  - "apps/ui/src/main/**"
+  - "apps/ui/src/renderer/index.html"
+  - "apps/ui/src/renderer/chats/use-show-in-finder*"
+  - "apps/ui/src/renderer/chats/browser/chat-link*"
+  - "apps/ui/src/renderer/chats/artifact-frame*"
+  - "apps/daemon/src/auth/**"
+  - "apps/daemon/src/v1/**/remote-*"
+  - "apps/daemon/src/v1/shares/**"
+  - "apps/daemon/src/v1/plugins/**"
+  - "apps/daemon/src/v1/browser/**"
+  - "apps/daemon/src/v1/agents/adapters/cursor-acp/**"
+  - "apps/daemon/src/v1/agents/services/polled-spend*"
+  - "apps/daemon/src/v1/agents/utils/polled-spend*"
+  - "apps/daemon/src/v1/agents/services/pull-request-lifecycle*"
+  - "apps/daemon/src/v1/agents/utils/pull-request-lifecycle*"
+  - "apps/daemon/src/v1/agents/services/model-price-catalog*"
+  - "apps/daemon/src/v1/agents/utils/model-prices*"
+  - "apps/daemon/src/v1/agents/utils/artifact-page*"
+  - "apps/daemon/src/v1/agents/services/artifact-store*"
+  - "apps/daemon/src/v1/agents/controllers/artifacts.controller*"
+  - "apps/daemon/src/v1/agents/utils/host-gallery*"
+  - "apps/daemon/src/v1/agents/utils/host-ui*"
+  - "apps/daemon/src/v1/agents/services/gallery-image*"
+  - "apps/daemon/src/v1/agents/services/surface-media*"
+  - "apps/daemon/src/v1/agents/services/run-download-budget*"
+  - "apps/daemon/src/v1/agents/utils/remote-image*"
+  - "apps/daemon/src/v1/mcp/tools/show-artifact/**"
+  - "apps/daemon/src/v1/mcp/tools/show-gallery/**"
+  - "apps/daemon/src/v1/mcp/tools/show-ui/**"
+  - "apps/daemon/src/v1/mcp/tools/browser-*/**"
+  - "scripts/fetch-search-model.mjs"
+  - ".github/workflows/model-assets.yaml"
+---
+# Network constraints (local-first & security)
+
+The root `AGENTS.md` → *Constraints* states the rule; this file holds each allowed call's limits.
+
+**No cloud service of geniro's own and no remote code paths.** No geniro backend, telemetry, account or sync. geniro never holds a credential of its own, syncs user data anywhere, or talks to a machine on someone else's say-so. Exactly nine kinds of outbound call are allowed:
+
+1. **The user's own login, the user's own data.**
+   - `main/github-prs.ts` runs the user's `gh` CLI; geniro holds no token and degrades to silence without login or network.
+   - An analysis reads the GitHub life of the pull requests its analysed runs named — and no other — through the user's `gh` run by the daemon (`PullRequestLifecycleService`, `v1/agents`: one GraphQL query and the branch's Actions runs per pull request, `gh` resolved on the login-shell PATH, `buildChildEnv`'s env, registered with `ProcessRegistry`), only while an analysis reads `view=runs` or `view=pr` or files a team card. Nothing is stored: readings are kept in memory per pull request with the head sha they were read at (a merged or closed one for the daemon's life, an open one for 10 minutes). No `gh`, a signed-out `gh` or a pull request it cannot see answers `lifecycle: null` with its reason.
+   - cursor's account-spend poll (`CursorAcpAdapter.fetchAccountSpend` via `v1/agents/services/polled-spend.service.ts`) asks each account under its own login — a named configuration's `auth.json`, else the user's `cursor-access-token` Keychain item — and requests one fixed host itself, one request per account per poll. The token is used for that poll only and never stored. Every failure ends as "no cost reported" for that account's conversations.
+   - The poll runs at most every 60 s while a cursor run is producing items and every 10 min otherwise, at most `CURSOR_USAGE_MAX_PAGES` pages per account per poll, and never when idle.
+   - cursor's plan limits (`CursorAcpAdapter.readPlanLimits`) ask the same host the two methods the CLI's own `/usage` asks, under the run's profile login (a named configuration's `auth.json`, else that Keychain item), only when a readout is opened or a turn's reading is taken, at most once per account every `CURSOR_PLAN_LIMITS_MIN_INTERVAL_MS`. The token is used for those requests only and never stored; every failure ends as "no reading".
+2. **geniro's own public release metadata and artifacts**, anonymous, one fixed host: `main/updater.ts`, `main/update-installer.ts`.
+   - The search model (`main/search-model/`): the files the pinned manifest names, from its own pre-release tag of the same repository, fetched only when the user turns search by meaning on in Settings → Search or presses Update model, each checked against `SHA256SUMS.txt` and the manifest's sha256 before it is used. Hugging Face is reached only by the `model-assets` workflow (run by a push to `main` that changes the manifest, and by hand; it uploads only the files a tag is missing and fails rather than replace one already published) and the dev-only `scripts/fetch-search-model.mjs`, never by the app.
+3. **An artifact page loading public libraries** from cdnjs, jsDelivr `/npm/` (not `/gh/`), unpkg and Google Fonts (`ARTIFACT_PAGE_CSP` in `apps/daemon/src/v1/agents/utils/artifact-page.ts`).
+   - Scripts, stylesheets and fonts only. `connect-src` stays shut and `img-src` is `data:` only. The framed page alone is served with `'self'` added to `media-src` (`ARTIFACT_SERVED_PAGE_CSP`), for its own copied audio and video on the key-gated media route (`'self'` is the page URL's origin even in the opaque-origin sandbox; measured in Electron); a share envelope and a saved file keep `media-src data:`.
+   - `ARTIFACT_CDN_HOSTS` in `apps/ui/src/main/network-lockdown.ts` is a twin of the CSP: Chromium resolves those hosts by exact name and nothing else.
+   - The route sends `Referrer-Policy: no-referrer`, because the page URL carries its key.
+   - Do not add the Tailwind Play CDN (`cdn.tailwindcss.com`); pages use the v4 browser build from jsDelivr.
+   - The frame's sandbox is `allow-scripts` alone. Links it posts are opened in the user's browser without confirmation (user decision), except a click on one of the page's own inlined pictures (the picture itself or a link to it), which opens in the app's image viewer; main cancels any frame navigation off the artifact route.
+   - A `data-geniro-open` button it posts is shown in Finder (user request), only on the user's fresh click inside the frame (`navigator.userActivation`, user decision), one per click (`OPEN_PATH_GAP_MS`, the 5 s a click stays fresh), and never from a paired device (`showInFinder`, `denyRemotely`): a plain folder opens, anything else — a file, or a folder named with an extension or holding `Contents`, judged on the real path — is only revealed, so nothing is launched. A markdown link in the chat whose address is a local absolute path is shown in Finder the same way, through the same channel and gates (user decision; `useShowInFinder`, `chats/browser/chat-link.tsx`); a `file:` URL or a relative path is not.
+   - The answers a page saves reach the daemon through its host, never from the page itself (`PUT /v1/chats/:runId/artifacts/:artifactId/answers`, only the names that changed, merged there, only while the frame holds focus); the run's agent reads them with `artifact_answers`.
+4. **The public model price catalog**: the daemon's `ModelPriceCatalog` GETs `MODEL_PRICE_CATALOG_URL` (`https://models.dev/api.json`, a constant) with no credential or user data.
+   - At most one refresh an hour (a running daemon checks every 5 minutes; user decision), never blocking boot; a failed ask is retried after 5, then 15 minutes, then hourly (`MODEL_PRICES_RETRY_AFTER_MS`). The last good copy is kept at `<userData>/model-prices.json`; every failure is logged and swallowed.
+   - Read for the vendors whose models a CLI runs (`MODEL_PRICE_PROVIDERS`). Beside pricing turns, each model's list price is shown wherever the UI names a model (`AgentAdapter.modelPriceOf`, `.claude/rules/ui-chats-run-status.md`).
+   - An unlisted model has no price ("not measured", never $0). Tests set `fetchModelPrices: false`.
+5. **A CLI vendor's installer, on the user's press** (`main/cli-install.ts`): `curl -fsSL <url> | <shell>` with the one script URL from the CLI's descriptor (`main/agents/<cli>.ts` → `installer`). A constant, never run unasked.
+6. **An encrypted artifact page, to a place the user configured, through the user's own CLI** (`apps/daemon/src/v1/shares/`; mechanics: `.claude/rules/shares.md`).
+   - Only the AES-256-GCM envelope leaves the Mac; the page is encrypted in the daemon and the key travels in the link's `#fragment`, which no browser sends (and, for an agent's own share, in that agent's transcript — see `.claude/rules/storage-split.md`). Never upload plaintext.
+   - The destination is one the user added in Settings → Sharing (`gcloud`, `aws`, or their own program as argv, never a shell). geniro holds no credential and runs no host of its own.
+   - Only on a press, or by an agent's `show_artifact(share: true)` while the user's "Let agents share pages" switch is on (off by default). A share that failed because the destination's CLI is signed out is retried once, after the user's own "Sign in to …" press; nothing retries on its own.
+   - A revoke also runs unattended from the auto-revoke sweep, only while the user has set `Settings.sharing.autoRevokeAfterDays` (off by default).
+   - The share routes and settings are desktop only (`DesktopOnlyGuard`; a paired device may not write `Settings.sharing`). Accepted by decision: while agents may share, a message sent from a paired device can still ask an agent to share, because the agent's own MCP call is loopback.
+
+7. **A gallery picture or a card's media an agent named by URL** (`show_gallery`, `show_ui`'s Image, Video and AudioPlayer; user decisions): the daemon downloads it once, when the tool is called (`v1/agents/utils/remote-image.ts`), and the row or the card names the stored copy.
+   - Public hosts only: every resolved address of every hop is judged at connect time (`guardedLookup`), and loopback, private, link-local and reserved ranges are refused; an IP literal is judged directly.
+   - http(s) only, no credentials in the URL, at most 3 redirects, a 15 s deadline per picture and 45 s per call, `MAX_REMOTE_IMAGE_BYTES` per picture and `MAX_RUN_DOWNLOAD_BYTES` per run since the daemon started (counted as pictures land, so it can be passed by those in flight), png/jpeg/gif/webp judged by bytes. geniro adds no credential or user data, but the URL is the agent's, so outside `auto` a call naming one is put to the user (`hostGalleryDownloads`, `hostUiDownloads`); a local-only gallery stays auto-approved.
+   - A card's video and sound are `media/*` up to `MAX_UI_MEDIA_BYTES` each, judged by bytes, under the same per-run budget (`RunDownloadBudget`).
+   - The renderer never fetches: the Chromium lockdown stays as it is, its CSP adds only `media-src 'self' blob:` (a card's stored video or sound, read through the token-gated chat route and played from a `blob:` URL), and a markdown image by URL is still refused.
+
+8. **The in-app browser** (user decision: any address, for the user and for agents): pages the user opens beside a chat, or a chat's agent or team member opens with the `browser_*` tools, to any host, preview stands included.
+   - Browser tabs are `WebContentsView`s owned by Electron main (`apps/ui/src/main/browser/`), never an iframe or `<webview>` in the renderer. Each tab's session reaches the network only through geniro's loopback egress proxy (`egress-proxy.ts`), which resolves names in Node; the process-wide lockdown stays as it is, so the main window, the renderer and artifact pages still cannot reach a remote host, and `session.defaultSession` keeps its black hole.
+   - Only on the user's own press or link click, or an agent's tool call. Words typed into the address bar that are not an address are searched at `https://duckduckgo.com/?q=` (a fixed host, the user's own typing). Outside `auto`, the first open of each new host in a chat is put to the user on a card (Approve / Allow for this session / Deny); an agent-caused navigation to a host not yet approved is cancelled, and an agent may not read or drive a tab that sits on a host neither approved nor opened by the user in that chat (it is told to open it with `browser_navigate`, which raises the card). The user's own navigation never asks, and a host the user opened there (typed in the address bar or a new tab, or a transcript link they clicked) counts as approved for that chat, in Electron main only: the daemon still asks before an agent's own first open of it.
+   - Agents drive tabs only through `webContents.debugger` inside main; no remote-debugging port, no second Chromium. The daemon reaches the desktop window through one registered socket (`browser_request` / `browser_reply`), never a room, and a paired device can neither open nor drive the browser (every browser IPC channel is `denyRemotely`).
+   - Page permissions are denied; downloads go to `~/Downloads`; a certificate error is passed only by the user's "Continue anyway", never by an agent.
+
+9. **A plugin command the user approved** (`apps/daemon/src/v1/plugins/`; user decisions): the command line of a Geniro Plugin, run on this Mac through `/bin/sh -c` in the open thread's folder, by the user's own CLIs under the user's own login, only while its block is shown (on open, on ↻, on its timer while visible), on a button press, or on Settings → Plugins' Run now in a folder the user picks there. geniro holds no credential for it and stores no output: the last result lives in memory per (plugin, folder) and is lost on restart.
+   - The exact text is approved (`<userData>/plugins/.approved/<slug>.plugin.yaml`). A file whose text differs from that copy runs nothing, and so does a plugin never approved.
+   - Commands and buttons come only from the approved file, never from command output. Data reaches a button command only as `PLUGIN_*` environment variables, read from the daemon's own cached result at the press.
+   - A run has a 30 s default timeout (120 s at most) and 1 MB of output, and at most one runs per plugin and folder at a time. The timer refreshes at most once a minute; the user's own ↻ or Run now always runs, and so does the refresh right after a button press.
+   - A secret a command prints is masked only if it is registered (`redactSecrets`), so an unregistered one can show in the block.
+
+**LAN gateway** (`apps/ui/src/main/remote/`, `Settings.remoteAccessEnabled`) is the one inbound exception: the Mac serves the app to the user's own devices on the same network. Mechanics: `apps/ui/src/main/AGENTS.md` → **LAN gateway**.
+
+- The daemon still binds `127.0.0.1` only; every LAN-facing byte goes through that directory, which reverse-proxies to loopback (the listener binds IPv4 only).
+- Nothing reaches the daemon for an unpaired device: the pairing check gates `/v1/*`, `/health` and the `/ws` upgrade, and each of them is also checked for its `Origin` (an Origin on its scheme's default port is compared with that port). One exception (user decision): a GET or HEAD of exactly an artifact page's audio or video, `/v1/artifacts/<run>/<page>/media/<sha256>.<ext>?key=<64 hex>` (`isArtifactMediaRequest`), passes without the cookie and WITHOUT the launch token, gated by the page's own 256-bit key at the daemon — the page plays it from an opaque-origin frame, which sends no `SameSite` cookie (measured in Chromium).
+- The daemon token never leaves the machine: the gateway injects `Authorization`, strips whatever the browser sent and rewrites the token in a `/ws` upgrade URL. Reading the daemon handle is `denyRemotely`; the status read has the token blanked.
+- Pairing is a 6-digit code shown on the Mac, rate-limited per address and globally; the global limit rotates the code.
+- A `Host` geniro would not hand out is refused (only loopback, private IPv4, link-local/unique-local IPv6, `*.local`).
+- User decisions: a paired device may refresh plugins, press their buttons, approve a plugin (its card or Review), change its folders and delete it — so whoever holds a paired device can make an approved command run on the Mac; only Show file in Finder stays on the Mac.
+
+**Public tunnel** (`apps/ui/src/main/remote/tunnel.ts`): a third-party client the user already has (`cloudflared`, else `ngrok`) pointed at the gateway's loopback side.
+
+- geniro hosts nothing and holds no credential for it.
+- Tunnel requests meet the same Host guard, pairing gate, `Origin` check and injected credential.
+- The Host widening is a `*.suffix` mask that exists only while the tunnel is open, and the exact host it printed only while that host is checked. Never admit a bare `*` or a one-label suffix.
+- Readiness check, while starting only: the zone's own nameservers are asked for the new name, and `GET /__geniro/session` is sent through the public address at their answer, about once a second until it answers or the connect wait ends. Once per start the nameservers are first asked for a name outside every zone; where a resolver on the way answers it (port 53 intercepted), the new name is never asked. When this Mac cannot check at all, the address is shown after about 30 s with a warning (user decision); when the check works and the address does not answer yet, it waits. It runs in Electron main's Node (the Chromium lockdown is untouched), finds the zone's nameservers through the system resolver, reaches only the user's own tunnel and those nameservers, sends no credential, and never asks the system resolver for the new name, so an early lookup cannot leave the address dead on the user's network.
+- Opened only by a press at the Mac (`denyRemotely`, so never from a paired device). A launch starts with no tunnel; turning remote access off closes it.
+- Still not allowed: a relay or rendezvous host of geniro's own, a credential for one, a tunnel opened unasked, or reaching the daemon other than through loopback.

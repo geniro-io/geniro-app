@@ -71,7 +71,8 @@ it starts. A pull request is merged once CI passes and it has been reviewed.
   `.claude/rules/`. Please read the parts that cover the code you're touching.
 - **Local-first.** Geniro runs entirely on the user's machine. A change that
   adds a cloud service, telemetry or a stored credential will not be accepted;
-  see _Constraints_ in `AGENTS.md`.
+  see _Constraints_ in `AGENTS.md` and, in full,
+  `.claude/rules/network-constraints.md`.
 
 ## Using an AI coding agent
 

@@ -13,7 +13,7 @@ paths:
 
 # Stats
 
-- `usage_events` and `usage_activity`: ledgers that outlive teardown (root `AGENTS.md` → *Storage split*). Append-only, with two exceptions, both `usage_activity`:
+- `usage_events` and `usage_activity`: ledgers that outlive teardown (`.claude/rules/storage-split.md`). Append-only, with two exceptions, both `usage_activity`:
   - A `run_outcome` row (one per run and pull request, keyed `outcome:<runId>:<owner>/<repo>#<n>`) is UPDATED to a newer outcome, only ever forward by its source item's seq — or at the same seq only while it lacks the history figures — in one `INSERT … ON CONFLICT … DO UPDATE … WHERE` (`UsageActivityDao.upsertRunOutcome`). Each copy carries the pull request's history figures and the questions asked before it, read from the run's rows when the copy is made (`RunOutcomeHistoryService`). `RunOutcomeLedgerService` copies each `run_outcome` item off `bus.all()` and, behind the boot, sweeps every outcome row the ledger lacks, holds older, or holds without its figures; `UsageActivityDao.runOutcomes` is the read a per-team-version outcome fold will use; the versions table does not read it yet.
   - A team run's `thread` row carries the team version ledger's version stamp, UPDATED in place (below).
 - Team version ledger (`TeamLedgerService`): a team run's `thread` row is stamped with its team and team version (`teamVersionOf`, `teams/utils/team-version.ts`: the mode, members, trigger, instruction blocks and stages in their authored order, an empty stage list counting as none, and `maxActiveTurns`; never the team's name or description, nor a member's `avatar` — a version restore keeps each member's current face; a run snapshot written before members hashes as it always did, `legacyGraphVersionOf`) at `run_created`.

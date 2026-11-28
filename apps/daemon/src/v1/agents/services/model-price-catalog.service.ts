@@ -109,8 +109,8 @@ interface StoredCatalog {
  *
  * **What goes out, and what does not.** One anonymous GET of one fixed URL
  * ({@link MODEL_PRICE_CATALOG_URL}): no credential, no cookie, no query, nothing
- * about the user or their conversations. This is the fourth outbound shape the
- * root `AGENTS.md` admits under *Constraints*.
+ * about the user or their conversations. This is the fourth outbound shape
+ * `.claude/rules/network-constraints.md` admits.
  */
 @Injectable()
 export class ModelPriceCatalog

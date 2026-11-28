@@ -12,6 +12,7 @@ import {
   Zap,
 } from 'lucide-react';
 import {
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -234,7 +235,7 @@ import type { GoalsActions } from './goals-list';
 import type { RunGoals } from './goals-section';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { isCallRow, mergeAnchorRows, withAnchors } from './history-anchors';
-import type { HostedThread } from './hosted-thread';
+import type { FinishedThreadLine, HostedThread } from './hosted-thread';
 import { foldsHolding } from './jump-folds';
 import { jumpAnchorProps } from './jump-target';
 import { JumpToLatest } from './jump-to-latest';
@@ -377,7 +378,11 @@ import {
 } from './task-payload';
 import { agentNameOf } from './team-note-author';
 import { firstMessageMemberOf, rootAgentOf, runLeadOf } from './team-root';
-import { newestDoneSeqByRun } from './thread-done-context';
+import {
+  newestDoneSeqByRun,
+  threadDoneDismissalsOf,
+  ThreadFinishKeysContext,
+} from './thread-done-context';
 import { hasThreadNotes } from './thread-notes';
 import {
   deliverRelayedImages,
@@ -561,6 +566,7 @@ const FOLDER_PROJECT: ComposerProject = { projectId: null, source: 'folder' };
 const NO_PROJECTS: ProjectTargetRef[] = [];
 const NO_NOTIFIED_RUNS: ChatRun[] = [];
 const NO_ENTRIES: TranscriptEntry[] = [];
+const NO_FINISHED: readonly FinishedThreadLine[] = [];
 
 /**
  * What a new run is told about its project: nothing for the folder's own (the
@@ -5026,15 +5032,13 @@ export function Chats({
   );
   const threadArchived = useThreadArchived(apis, client, doneRunIds);
   const managerNotices = hosted?.managerNotices;
+  const threadFinishKeys = useContext(ThreadFinishKeysContext);
   const threadDoneDismissals = useMemo(
     () =>
       managerChat && managerNotices !== undefined
-        ? {
-            through: managerNotices.doneDismissedThrough,
-            dismiss: managerNotices.dismissDone,
-          }
+        ? threadDoneDismissalsOf(managerNotices, threadFinishKeys)
         : null,
-    [managerChat, managerNotices],
+    [managerChat, managerNotices, threadFinishKeys],
   );
   const waitingItems = useWaitingItems(
     apis,
@@ -5255,6 +5259,8 @@ export function Chats({
     () => requestRows.filter((item) => openRequestId(item) !== null),
     [requestRows, openRequestId],
   );
+  const finishedThreads =
+    (managerChat ? hosted?.finishedThreads : null) ?? NO_FINISHED;
   /**
    * ONE card builder for both placements — the pinned slot and the settled
    * transcript row. The two differ only in WHERE they hang, and a second copy
@@ -11346,11 +11352,13 @@ export function Chats({
                   It sits ABOVE the composer because that is where the answer
                   gets typed — the question and the reply belong on the same
                   edge of the screen. */}
-                          {pinnedRequest ? (
+                          {pinnedRequest !== null ||
+                          finishedThreads.length > 0 ? (
                             <PinnedRequests
                               requests={pinnedRequests}
-                              pinnedId={pinnedRequest.id}
+                              pinnedId={pinnedRequest?.id ?? null}
                               renderCard={approvalCardFor}
+                              finished={finishedThreads}
                             />
                           ) : null}
                         </SettingsNoticesScope>

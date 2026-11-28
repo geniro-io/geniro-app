@@ -28,8 +28,10 @@ import {
   ThreadArchivedContext,
   ThreadDoneDismissalsContext,
   ThreadDoneNewestContext,
+  ThreadFinishKeysContext,
   ThreadReportsContext,
 } from './thread-done-context';
+import { ThreadDonePages } from './thread-done-pages';
 import {
   sentOutcomeWords,
   type ThreadMessageRow,
@@ -116,6 +118,7 @@ export const ThreadEventCard = memo(function ThreadEventCard({
     kind === 'done' && (archivedMap?.get(runId) ?? null) !== null;
   const reports = useContext(ThreadReportsContext);
   const dismissals = useContext(ThreadDoneDismissalsContext);
+  const finishKey = useContext(ThreadFinishKeysContext)?.get(runId) ?? null;
   const heading = identityOf(known, title, pullRequest);
   const identity = kind === 'done' ? { ...heading, status: null } : heading;
   const reply = inReplyTo === null ? '' : plainPreview(inReplyTo);
@@ -189,6 +192,7 @@ export const ThreadEventCard = memo(function ThreadEventCard({
       }
       text={shownText}
       memoryKey={memoryKey}
+      body={kind === 'done' ? <ThreadDonePages runId={runId} /> : undefined}
       foot={
         kind !== 'done' ? undefined : (
           <ThreadFoot slot="thread-event" at={at}>
@@ -202,7 +206,8 @@ export const ThreadEventCard = memo(function ThreadEventCard({
                 Open chat
               </ThreadActionButton>
             )}
-            {dismissals === null || seq === null ? null : (
+            {dismissals === null ||
+            (seq === null && finishKey === null) ? null : (
               <ThreadActionButton
                 slot="thread-event-dismiss"
                 label={`Dismiss ${identity.title}`}
@@ -244,6 +249,7 @@ export function ThreadEventRow({
 }): React.JSX.Element | null {
   const newest = useContext(ThreadDoneNewestContext);
   const dismissals = useContext(ThreadDoneDismissalsContext);
+  const finishKeys = useContext(ThreadFinishKeysContext);
   switch (row.kind) {
     case 'received':
       return (
@@ -285,7 +291,12 @@ export function ThreadEventRow({
         (done) =>
           seq === undefined ||
           (isNewestDone(newest, done.runId, seq) &&
-            !isDoneDismissed(dismissals, done.runId, seq)),
+            !isDoneDismissed(
+              dismissals,
+              done.runId,
+              seq,
+              finishKeys?.get(done.runId) ?? null,
+            )),
       );
       if (shown.length === 0) {
         return null;

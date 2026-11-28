@@ -128,7 +128,7 @@ describe('AnswerPopover', () => {
     );
   });
 
-  it('answers through the Needs you path with the option picked', () => {
+  it('answers through the thread’s own verdict path with the option picked', () => {
     const onAnswer = vi.fn();
     draw({ onAnswer });
 

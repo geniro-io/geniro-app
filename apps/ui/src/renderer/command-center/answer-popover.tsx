@@ -8,7 +8,7 @@ import { ErrorText } from '../components/error-text';
 import { Button } from '../components/ui/button';
 import { PaletteDot } from '../components/ui/palette-dot';
 import { Popover } from '../components/ui/popover';
-import { type NeedsYouPanelProps, RequestCard } from './needs-you-panel';
+import { type AnswerRequest, RequestCard } from './request-card';
 import type { OpenRequest } from './use-open-requests';
 
 export interface AnswerPopoverProps {
@@ -19,7 +19,7 @@ export interface AnswerPopoverProps {
   /** The cards the thread waits on the user for; the popover is drawn only while there is one. */
   requests: readonly OpenRequest[];
   error: string | null;
-  onAnswer: NeedsYouPanelProps['onAnswer'];
+  onAnswer: AnswerRequest;
   /** Open the thread as its card on the canvas. */
   onShowThread: () => void;
   onClose: () => void;
@@ -28,7 +28,7 @@ export interface AnswerPopoverProps {
 /**
  * A graph node's waiting question or approval, answered where the user
  * pressed Answer: the thread's own card in a popover hung from the button,
- * answered the way the Needs you panel answers it.
+ * answered the way the Needs you gallery answers it.
  */
 export function AnswerPopover({
   anchor,

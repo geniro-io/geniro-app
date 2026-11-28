@@ -11,10 +11,17 @@ export interface ManagerNotices {
   notices: ReadonlyMap<string, SettingsNotice> | null;
   /** Per thread, the seq of the newest Done row the user dismissed. */
   doneDismissedThrough: ReadonlyMap<string, number>;
+  /** Per thread, the board's `finishKey` of the finish the user dismissed. */
+  doneDismissedFinish: ReadonlyMap<string, string | null>;
   /** The notices still waiting on the user: open and not dismissed. */
   unresolved: number;
   dismiss: (noticeId: string) => void;
-  dismissDone: (runId: string, seq: number) => void;
+  /** A Done row's seq, or null for every row so far; `finishKey` is the finish shown, hidden at once. */
+  dismissDone: (
+    runId: string,
+    seq: number | null,
+    finishKey: string | null,
+  ) => void;
 }
 
 /** A notice still waiting on the user. */
@@ -23,10 +30,19 @@ export function noticeUnresolved(notice: SettingsNotice): boolean {
 }
 
 const NO_DISMISSALS: ReadonlyMap<string, number> = new Map();
+const NO_FINISHES: ReadonlyMap<string, string | null> = new Map();
 
 function dismissalsOf(list: SettingsNoticesDto): ReadonlyMap<string, number> {
   return new Map(
     list.doneDismissals.map(({ runId, throughSeq }) => [runId, throughSeq]),
+  );
+}
+
+function finishesOf(
+  list: SettingsNoticesDto,
+): ReadonlyMap<string, string | null> {
+  return new Map(
+    list.doneDismissals.map(({ runId, finishKey }) => [runId, finishKey]),
   );
 }
 
@@ -45,11 +61,14 @@ export function useManagerNotices(
   > | null>(null);
   const [doneDismissedThrough, setDoneDismissedThrough] =
     useState<ReadonlyMap<string, number>>(NO_DISMISSALS);
+  const [doneDismissedFinish, setDoneDismissedFinish] =
+    useState<ReadonlyMap<string, string | null>>(NO_FINISHES);
   const generation = useRef(0);
 
   const adoptList = useLatestCallback((list: SettingsNoticesDto) => {
     setNotices(new Map(list.notices.map((notice) => [notice.id, notice])));
     setDoneDismissedThrough(dismissalsOf(list));
+    setDoneDismissedFinish(finishesOf(list));
   }, []);
 
   const reload = useLatestCallback(() => {
@@ -96,14 +115,26 @@ export function useManagerNotices(
   );
 
   const dismissDone = useLatestCallback(
-    (runId: string, seq: number) => {
-      setDoneDismissedThrough((known) =>
-        (known.get(runId) ?? 0) >= seq ? known : new Map(known).set(runId, seq),
-      );
+    (runId: string, seq: number | null, finishKey: string | null) => {
+      if (seq !== null) {
+        setDoneDismissedThrough((known) =>
+          (known.get(runId) ?? 0) >= seq
+            ? known
+            : new Map(known).set(runId, seq),
+        );
+      }
+      if (finishKey !== null) {
+        setDoneDismissedFinish((known) =>
+          known.get(runId) === finishKey
+            ? known
+            : new Map(known).set(runId, finishKey),
+        );
+      }
+      generation.current += 1;
       void apis.commandCenter
         .dismissCommandCenterThreadDone({
           runId,
-          dismissThreadDoneDto: { seq },
+          dismissThreadDoneDto: seq === null ? {} : { seq },
         })
         .then(
           (list) => {
@@ -125,7 +156,21 @@ export function useManagerNotices(
   );
 
   return useMemo(
-    () => ({ notices, doneDismissedThrough, unresolved, dismiss, dismissDone }),
-    [notices, doneDismissedThrough, unresolved, dismiss, dismissDone],
+    () => ({
+      notices,
+      doneDismissedThrough,
+      doneDismissedFinish,
+      unresolved,
+      dismiss,
+      dismissDone,
+    }),
+    [
+      notices,
+      doneDismissedThrough,
+      doneDismissedFinish,
+      unresolved,
+      dismiss,
+      dismissDone,
+    ],
   );
 }

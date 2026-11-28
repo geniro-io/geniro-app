@@ -627,6 +627,26 @@ function TitlesOnly({
   );
 }
 
+/** One item waiting for review, as its own card with its Settings row's actions; null once it no longer waits. */
+export function WaitingReviewCard({
+  store,
+  kind,
+  id,
+}: {
+  store: WaitingItemsStore;
+  kind: Kind;
+  id: string;
+}): React.JSX.Element | null {
+  if (!(heldOf(store, kind)?.has(id) ?? false)) {
+    return null;
+  }
+  return (
+    <Frame kind={kind} heading={KIND_WORDS[kind].one}>
+      <ItemBody store={store} kind={kind} id={id} />
+    </Frame>
+  );
+}
+
 /**
  * The manager's announce of items waiting for the user's review: one item as
  * its Settings row with the same actions, several as a count of those still

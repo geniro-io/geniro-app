@@ -87,11 +87,17 @@ beforeEach(() => {
       dismissThreadDoneDto,
     }: {
       runId: string;
-      dismissThreadDoneDto: { seq: number };
+      dismissThreadDoneDto: { seq?: number };
     }) =>
       Promise.resolve({
         notices: list.notices,
-        doneDismissals: [{ runId, throughSeq: dismissThreadDoneDto.seq }],
+        doneDismissals: [
+          {
+            runId,
+            throughSeq: dismissThreadDoneDto.seq ?? 12,
+            finishKey: dismissThreadDoneDto.seq === undefined ? 'fk-a' : null,
+          },
+        ],
       }),
   );
   container = document.createElement('div');
@@ -157,7 +163,7 @@ describe('useManagerNotices', () => {
     await mount();
 
     act(() => {
-      seen!.dismissDone('thread-a', 7);
+      seen!.dismissDone('thread-a', 7, null);
     });
     expect(seen?.doneDismissedThrough.get('thread-a')).toBe(7);
     expect(dismissCommandCenterThreadDone).toHaveBeenCalledWith({
@@ -165,7 +171,9 @@ describe('useManagerNotices', () => {
       dismissThreadDoneDto: { seq: 7 },
     });
 
-    list.doneDismissals = [{ runId: 'thread-a', throughSeq: 7 }];
+    list.doneDismissals = [
+      { runId: 'thread-a', throughSeq: 7, finishKey: null },
+    ];
     await act(async () => {
       changed({ runIds: ['manager'], reason: 'notices' });
     });
@@ -179,9 +187,29 @@ describe('useManagerNotices', () => {
     await mount();
 
     await act(async () => {
-      seen!.dismissDone('thread-a', 7);
+      seen!.dismissDone('thread-a', 7, null);
     });
 
     expect(seen?.doneDismissedThrough.has('thread-a')).toBe(false);
+  });
+
+  it('hides the finish the gallery dismisses at once, with no row, and keeps what the daemon records', async () => {
+    await mount();
+
+    act(() => {
+      seen!.dismissDone('thread-a', null, 'fk-a');
+    });
+    expect(seen?.doneDismissedFinish.get('thread-a')).toBe('fk-a');
+    expect(seen?.doneDismissedThrough.has('thread-a')).toBe(false);
+    expect(dismissCommandCenterThreadDone).toHaveBeenCalledWith({
+      runId: 'thread-a',
+      dismissThreadDoneDto: {},
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(seen?.doneDismissedFinish.get('thread-a')).toBe('fk-a');
+    expect(seen?.doneDismissedThrough.get('thread-a')).toBe(12);
   });
 });

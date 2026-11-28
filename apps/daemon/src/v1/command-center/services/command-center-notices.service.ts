@@ -29,6 +29,7 @@ import type {
 import { CommandCenterDoneDismissalDao } from '../dao/command-center-done-dismissal.dao';
 import { CommandCenterNoticeDao } from '../dao/command-center-notice.dao';
 import type { CommandCenterNotice } from '../entity/command-center-notice.entity';
+import { finishKeyHash } from '../utils/finish-key';
 import {
   type NoticeReading,
   type OpenNotice,
@@ -162,9 +163,10 @@ export class CommandCenterNoticesService
     ]);
     return {
       notices: notices.map(noticeToWire),
-      doneDismissals: dismissals.map(({ runId, throughSeq }) => ({
+      doneDismissals: dismissals.map(({ runId, throughSeq, finishKey }) => ({
         runId,
         throughSeq,
+        finishKey,
       })),
     };
   }
@@ -206,32 +208,64 @@ export class CommandCenterNoticesService
   }
 
   /**
-   * The user put a thread's Done card away, on any device: every Done row of
-   * that thread up to `seq` draws nothing, and its next finish is a new card.
+   * The user put a thread's finish away, on any device: every Done row of that
+   * thread up to `seq` draws nothing — every one written so far when `seq` is
+   * null, as the gallery dismisses — the finish the board names now is
+   * recorded for the gallery, and the thread's next finish is a new card.
    */
-  async dismissDone(runId: string, seq: number): Promise<SettingsNotices> {
+  async dismissDone(
+    runId: string,
+    seq: number | null,
+  ): Promise<SettingsNotices> {
     const managerRunId = await this.board.managerRunId();
-    const row =
-      managerRunId === null
-        ? null
-        : await this.items.rowAtSeq(managerRunId, seq);
-    if (
-      managerRunId === null ||
-      row === null ||
-      !announcesDone(itemToWire(row).payload, runId)
-    ) {
+    if (managerRunId === null) {
       throw new NotFoundException(
         'DONE_ROW_NOT_FOUND',
-        `no Done row of ${runId} at seq ${seq}`,
+        `no manager chat holds a Done row of ${runId}`,
       );
     }
+    if (seq !== null) {
+      const row = await this.items.rowAtSeq(managerRunId, seq);
+      if (row === null || !announcesDone(itemToWire(row).payload, runId)) {
+        throw new NotFoundException(
+          'DONE_ROW_NOT_FOUND',
+          `no Done row of ${runId} at seq ${seq}`,
+        );
+      }
+    }
+    const finishKey = await this.finishKeyOf(runId);
+    if (seq === null && finishKey === null) {
+      throw new NotFoundException(
+        'THREAD_NOT_DONE',
+        `thread ${runId} is not a finished thread on the board`,
+      );
+    }
+    const through = seq ?? Math.max(0, await this.items.maxSeq(managerRunId));
     const changed = await this.chain.run(managerRunId, () =>
-      this.doneDismissals.dismiss(managerRunId, runId, seq, new Date()),
+      this.doneDismissals.dismiss(
+        managerRunId,
+        runId,
+        through,
+        finishKey,
+        new Date(),
+      ),
     );
     if (changed) {
       this.boardEvents.publishChanged([managerRunId], 'notices');
     }
     return this.list();
+  }
+
+  /** The finish the board names for a finished, unarchived thread; null for any other. */
+  private async finishKeyOf(runId: string): Promise<string | null> {
+    const {
+      runs: [run],
+    } = await this.board.activeThreads([runId]);
+    if (run === undefined) {
+      return null;
+    }
+    const column = (await this.board.columnsOf([run])).get(run.id);
+    return column === 'done' ? finishKeyHash(run) : null;
   }
 
   async review(kind: 'share-sign-in' | 'memory-conflicts'): Promise<void> {

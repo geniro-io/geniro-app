@@ -78,6 +78,9 @@ export class CommandCenterEventsService
           'refiled',
         );
       }),
+      this.agents.allDeleted().subscribe((runId) => {
+        this.events.publishChanged([runId], 'deleted');
+      }),
     );
   }
 

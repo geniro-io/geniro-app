@@ -138,7 +138,7 @@ export class CommandCenterController {
     return this.notices.dismiss(noticeId);
   }
 
-  /** The user put a thread's Done card away, on any device: it is gone until the thread finishes again. */
+  /** The user put a thread's finish away, on any device: its Done card and its gallery card are gone until it finishes again. */
   @Post('done/:runId/dismiss')
   @ApiOperation({ operationId: 'dismissCommandCenterThreadDone' })
   @ZodResponse({ status: 201, type: SettingsNoticesDto })
@@ -146,7 +146,7 @@ export class CommandCenterController {
     @Param('runId') runId: string,
     @Body() dto: DismissThreadDoneDto,
   ): Promise<SettingsNotices> {
-    return this.notices.dismissDone(runId, dto.seq);
+    return this.notices.dismissDone(runId, dto.seq ?? null);
   }
 
   /** The approved starts Electron main's drain starts. */

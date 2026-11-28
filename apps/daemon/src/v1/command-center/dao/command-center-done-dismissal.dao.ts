@@ -18,11 +18,12 @@ export class CommandCenterDoneDismissalDao extends BaseDao<CommandCenterDoneDism
     );
   }
 
-  /** False when the thread's cards were already dismissed through `seq` or later. */
+  /** False when the thread was already dismissed through `seq` or later, at the same finish. */
   async dismiss(
     managerRunId: string,
     runId: string,
     seq: number,
+    finishKey: string | null,
     at: Date,
   ): Promise<boolean> {
     const em = this.em.fork();
@@ -30,18 +31,21 @@ export class CommandCenterDoneDismissalDao extends BaseDao<CommandCenterDoneDism
     const known = await repo.findOne({ managerRunId, runId });
     if (known === null) {
       repo.create(
-        { managerRunId, runId, throughSeq: seq, dismissedAt: at },
+        { managerRunId, runId, throughSeq: seq, finishKey, dismissedAt: at },
         { partial: true },
       );
       await em.flush();
       return true;
     }
-    return (
-      (await repo.nativeUpdate(
-        { id: known.id, throughSeq: { $lt: seq } },
-        { throughSeq: seq, dismissedAt: at },
-      )) === 1
+    const throughSeq = Math.max(known.throughSeq, seq);
+    if (throughSeq === known.throughSeq && known.finishKey === finishKey) {
+      return false;
+    }
+    await repo.nativeUpdate(
+      { id: known.id },
+      { throughSeq, finishKey, dismissedAt: at },
     );
+    return true;
   }
 
   async deleteOf(managerRunId: string): Promise<void> {

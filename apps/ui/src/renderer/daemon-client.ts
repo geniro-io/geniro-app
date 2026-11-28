@@ -1457,6 +1457,7 @@ const COMMAND_CENTER_CHANGE_REASONS = [
   'refiled',
   'start',
   'notices',
+  'deleted',
 ] as const;
 
 /** Cards of the command center that moved: the board re-reads exactly these. */

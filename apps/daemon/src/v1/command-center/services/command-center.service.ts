@@ -18,6 +18,7 @@ import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
 import { CommandCenterThreadStartDao } from '../dao/command-center-thread-start.dao';
 import type { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 import { boardColumnOf } from '../utils/board-column';
+import { finishKeyHash } from '../utils/finish-key';
 import { cardsByRun, taskRefOf } from '../utils/task-ref';
 import { threadReportOf } from '../utils/thread-report';
 
@@ -200,6 +201,7 @@ export class CommandCenterService {
           lastAt: lastMail === null ? null : new Date(lastMail).toISOString(),
           awaitingReply: awaiting.has(run.id),
         },
+        finishKey: column === 'done' ? finishKeyHash(run) : null,
       };
     });
     return cards.sort((a, b) =>

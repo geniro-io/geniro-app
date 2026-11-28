@@ -34,7 +34,10 @@ import {
   storedShareWait,
 } from './settings-attention';
 import type { SettingsNoticeRowView } from './settings-notice-payload';
-import { SettingsNoticesContext } from './settings-notices-context';
+import {
+  SettingsNoticesContext,
+  type SettingsNoticesStore,
+} from './settings-notices-context';
 
 const SLOT = 'settings-attention';
 
@@ -342,23 +345,25 @@ export function MemoryConflictsCard({
   );
 }
 
+/** What a Settings notice's card draws now, or null while it draws nothing. */
+export type SettingsNoticeView =
+  | { kind: 'app-update'; offered: string | null }
+  | { kind: 'agent-updates'; rows: CliDetection[] }
+  | { kind: 'agent-sign-in'; rows: SignedOutAccount[]; ownsLogin: boolean }
+  | { kind: 'share-sign-in'; wait: ShareWait }
+  | { kind: 'memory-conflicts'; findingIds: readonly string[] };
+
 /**
- * A Settings notice's row in the manager chat: the card Settings' own live
- * readings draw for it while the notice stands and was not dismissed, nothing
- * otherwise. While a live reading is not known (a check under way, an account
- * not asked yet, shares a paired device cannot read) the card is drawn from what
- * the notice holds. A sign-in under way keeps its card until it ends.
+ * What a Settings notice's card shows: what Settings' own live readings hold
+ * for it while the notice stands and was not dismissed, nothing otherwise.
+ * While a live reading is not known (a check under way, an account not asked
+ * yet, shares a paired device cannot read) it is what the notice holds. A
+ * sign-in under way keeps its card until it ends.
  */
-export function SettingsNoticeCard({
-  row,
-}: {
-  row: SettingsNoticeRowView;
-}): React.JSX.Element | null {
-  const store = useContext(SettingsNoticesContext);
-  const identities = useContext(AgentIdentityContext);
-  if (store === null) {
-    return null;
-  }
+export function settingsNoticeView(
+  store: SettingsNoticesStore,
+  row: SettingsNoticeRowView,
+): SettingsNoticeView | null {
   const notice = store.notices?.get(row.noticeId);
   const signing = store.login.starting ?? store.login.login;
   const ownsLogin =
@@ -374,20 +379,13 @@ export function SettingsNoticeCard({
     return null;
   }
   const offered = newestNoticeVersion(notice.items);
-  const onDismiss = (): void => store.dismiss(row.noticeId);
-  const nameOf = (kind: string): string => agentDisplayName(identities, kind);
   const detections = store.detections ?? [];
   switch (row.kind) {
     case 'app-update':
       return appUpdateWaits(store.update.state) ||
-        appUpdateUnsettled(store.update.state) ? (
-        <AppUpdateCard
-          update={store.update}
-          remote={store.remote}
-          offered={offered}
-          onDismiss={onDismiss}
-        />
-      ) : null;
+        appUpdateUnsettled(store.update.state)
+        ? { kind: 'app-update', offered }
+        : null;
     case 'agent-updates': {
       const rows = detections
         .filter(
@@ -405,14 +403,7 @@ export function SettingsNoticeCard({
                 update: { ...detection.update, latestVersion: offered },
               },
         );
-      return rows.length === 0 ? null : (
-        <AgentUpdatesCard
-          rows={rows}
-          updates={store.cliUpdates}
-          nameOf={nameOf}
-          onDismiss={onDismiss}
-        />
-      );
+      return rows.length === 0 ? null : { kind: 'agent-updates', rows };
     }
     case 'agent-sign-in': {
       const rows = detections
@@ -422,40 +413,86 @@ export function SettingsNoticeCard({
             account.loggedIn !== true && row.key === signInNoticeKey(account),
         )
         .map(({ kind, configDir }) => ({ kind, configDir }));
-      return rows.length === 0 && !signingIn ? null : (
-        <AgentSignInCard
-          rows={rows}
-          login={store.login}
-          nameOf={nameOf}
-          profiles={store.profiles}
-          ownsLogin={ownsLogin}
-          onDismiss={onDismiss}
-        />
-      );
+      return rows.length === 0 && !signingIn
+        ? null
+        : { kind: 'agent-sign-in', rows, ownsLogin };
     }
     case 'share-sign-in': {
       const wait =
         store.shareWaits === null
           ? storedShareWait(notice)
           : shareWaitOf(store.shareWaits, row.key);
-      return wait === null ? null : (
+      return wait === null ? null : { kind: 'share-sign-in', wait };
+    }
+    case 'memory-conflicts': {
+      const findingIds = store.conflictIds ?? notice.items;
+      return findingIds.length === 0
+        ? null
+        : { kind: 'memory-conflicts', findingIds };
+    }
+  }
+}
+
+/** A Settings notice's row in the manager chat, and its card in the Needs you gallery. */
+export function SettingsNoticeCard({
+  row,
+}: {
+  row: SettingsNoticeRowView;
+}): React.JSX.Element | null {
+  const store = useContext(SettingsNoticesContext);
+  const identities = useContext(AgentIdentityContext);
+  const view = store === null ? null : settingsNoticeView(store, row);
+  if (store === null || view === null) {
+    return null;
+  }
+  const onDismiss = (): void => store.dismiss(row.noticeId);
+  const nameOf = (kind: string): string => agentDisplayName(identities, kind);
+  switch (view.kind) {
+    case 'app-update':
+      return (
+        <AppUpdateCard
+          update={store.update}
+          remote={store.remote}
+          offered={view.offered}
+          onDismiss={onDismiss}
+        />
+      );
+    case 'agent-updates':
+      return (
+        <AgentUpdatesCard
+          rows={view.rows}
+          updates={store.cliUpdates}
+          nameOf={nameOf}
+          onDismiss={onDismiss}
+        />
+      );
+    case 'agent-sign-in':
+      return (
+        <AgentSignInCard
+          rows={view.rows}
+          login={store.login}
+          nameOf={nameOf}
+          profiles={store.profiles}
+          ownsLogin={view.ownsLogin}
+          onDismiss={onDismiss}
+        />
+      );
+    case 'share-sign-in':
+      return (
         <ShareSignInCard
-          wait={wait}
+          wait={view.wait}
           api={store.apis.shares}
           remote={store.remote}
           onDismiss={onDismiss}
         />
       );
-    }
-    case 'memory-conflicts': {
-      const findingIds = store.conflictIds ?? notice.items;
-      return findingIds.length === 0 ? null : (
+    case 'memory-conflicts':
+      return (
         <MemoryConflictsCard
-          findingIds={findingIds}
+          findingIds={view.findingIds}
           onOpen={store.onOpenMemoryConflicts}
           onDismiss={onDismiss}
         />
       );
-    }
   }
 }

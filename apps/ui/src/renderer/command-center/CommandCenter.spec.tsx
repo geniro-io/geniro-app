@@ -37,6 +37,7 @@ const { probes, fakes } = vi.hoisted(() => {
       pullRequests: unset,
       apis: unset,
       managerNotices: unset,
+      noticeStore: unset,
     },
   };
 });
@@ -50,6 +51,12 @@ vi.mock('./use-command-center-timeline', () => ({
 vi.mock('./use-open-requests', async (importOriginal) => ({
   ...(await importOriginal<typeof useOpenRequestsModule>()),
   useOpenRequests: () => fakes.requests,
+}));
+vi.mock('../chats/use-waiting-items', () => ({
+  useWaitingItems: () => null,
+}));
+vi.mock('../chats/use-settings-notices', () => ({
+  useSettingsNotices: () => fakes.noticeStore,
 }));
 vi.mock('../projects/use-projects', () => ({
   useProjects: () => fakes.projects,
@@ -157,6 +164,7 @@ function cardOf(
   projectId: string,
   column: 'idle' | 'done' | 'working' | 'waiting' = 'idle',
   createdAt = NOW_ISO,
+  finishKey: string | null = column === 'done' ? `fk-${runId}` : null,
 ): unknown {
   return {
     run: {
@@ -177,6 +185,7 @@ function cardOf(
     note: null,
     activity: null,
     report: null,
+    finishKey,
   };
 }
 
@@ -202,6 +211,7 @@ function managerNoticesOf(unresolved: number) {
   return {
     notices: new Map(),
     doneDismissedThrough: new Map(),
+    doneDismissedFinish: new Map(),
     unresolved,
     dismiss: vi.fn(),
     dismissDone: vi.fn(),
@@ -242,6 +252,7 @@ beforeEach(() => {
   fakes.pullRequests = { byKey: new Map() };
   fakes.apis = { teams: { listTeams: () => Promise.resolve([]) } };
   fakes.managerNotices = managerNoticesOf(0);
+  fakes.noticeStore = { notices: new Map() };
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -676,32 +687,24 @@ describe('CommandCenter — a thread opened from the manager’s window', () => 
 });
 
 describe('CommandCenter — the phone sidebar and the focus', () => {
-  it.each([
-    ['command-center-needs-toggle'],
-    ['command-center-timeline-toggle'],
-  ])(
-    'closes an open sidebar (%s) when a thread is shown on a phone',
-    async (toggle) => {
-      stubMatchMedia(true);
-      await renderPage();
-      act(() => {
-        container
-          .querySelector<HTMLButtonElement>(`[data-slot="${toggle}"]`)!
-          .click();
-      });
-      expect(
-        container.querySelector('[data-slot="command-center-sidebar"]'),
-      ).not.toBeNull();
+  it('closes the open Timeline when a thread is shown on a phone', async () => {
+    stubMatchMedia(true);
+    await renderPage();
+    act(() => {
+      timelineToggle().click();
+    });
+    expect(
+      container.querySelector('[data-slot="command-center-sidebar"]'),
+    ).not.toBeNull();
 
-      act(() => {
-        probes.dock!.onOpenThread('run-b');
-      });
+    act(() => {
+      probes.dock!.onOpenThread('run-b');
+    });
 
-      expect(
-        container.querySelector('[data-slot="command-center-sidebar"]'),
-      ).toBeNull();
-    },
-  );
+    expect(
+      container.querySelector('[data-slot="command-center-sidebar"]'),
+    ).toBeNull();
+  });
 
   it('shows the thread’s card instead of a popover when Reply is pressed on a phone', async () => {
     stubMatchMedia(true);
@@ -731,11 +734,7 @@ describe('CommandCenter — the phone sidebar and the focus', () => {
     stubMatchMedia(false);
     await renderPage();
     act(() => {
-      container
-        .querySelector<HTMLButtonElement>(
-          '[data-slot="command-center-needs-toggle"]',
-        )!
-        .click();
+      timelineToggle().click();
     });
 
     act(() => {
@@ -784,6 +783,121 @@ describe('CommandCenter — the phone sidebar and the focus', () => {
     const second = probes.graph!.focus!;
     expect(second.runId).toBe('run-b');
     expect(second.seq).toBeGreaterThan(first.seq);
+  });
+});
+
+describe('CommandCenter — the Needs you gallery', () => {
+  const needsToggle = (): HTMLButtonElement =>
+    container.querySelector<HTMLButtonElement>(
+      '[data-slot="command-center-needs-toggle"]',
+    )!;
+  const gallery = (): Element | null =>
+    document.body.querySelector('[data-slot="attention-gallery"]');
+
+  beforeEach(() => {
+    fakes.board = boardOf([
+      cardOf('run-a', 'p1'),
+      cardOf('run-b', 'p2', 'done'),
+    ]);
+    fakes.requests = {
+      requests: [
+        openRequestOf('run-a', 'item-7', 'How should the export retry?'),
+      ],
+      error: null,
+      answer: vi.fn(),
+    };
+  });
+
+  it('opens the gallery from the header button, with no sidebar list', async () => {
+    await renderPage();
+    expect(gallery()).toBeNull();
+
+    clickOn(needsToggle());
+
+    expect(gallery()).not.toBeNull();
+    expect(
+      document.body.querySelector('[data-slot="command-center-needs-you"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-slot="command-center-sidebar"]'),
+    ).toBeNull();
+    expect(
+      [
+        ...document.body.querySelectorAll<HTMLElement>(
+          '[data-slot="attention-card"]',
+        ),
+      ].map((card) => card.dataset.kind),
+    ).toEqual(['question', 'finished']);
+  });
+
+  it('badges the button with every waiting card and splits it in the tooltip', async () => {
+    await renderPage();
+
+    expect(
+      container.querySelector('[data-slot="command-center-needs-count"]')
+        ?.textContent,
+    ).toBe('2');
+    expect(needsToggle().title).toBe('Waiting on you: 1 question · 1 finished');
+  });
+
+  it('drops the badge once the only finished card is dismissed and nothing else waits', async () => {
+    fakes.requests = { requests: [], error: null, answer: vi.fn() };
+    fakes.managerNotices = {
+      ...managerNoticesOf(0),
+      doneDismissedFinish: new Map([['run-b', 'fk-run-b']]),
+    };
+    await renderPage();
+
+    expect(
+      container.querySelector('[data-slot="command-center-needs-count"]'),
+    ).toBeNull();
+    clickOn(needsToggle());
+    expect(
+      document.body.querySelector('[data-slot="attention-gallery-empty"]')
+        ?.textContent,
+    ).toContain('All caught up');
+  });
+
+  it("dismisses a finished card through the manager's Done dismissals, naming the finish it shows", async () => {
+    const notices = managerNoticesOf(0);
+    fakes.managerNotices = notices;
+    await renderPage();
+    clickOn(needsToggle());
+
+    clickOn(
+      document.body.querySelector(
+        '[data-slot="attention-card"][data-kind="finished"] [data-slot="thread-event-dismiss"]',
+      ),
+    );
+
+    expect(notices.dismissDone).toHaveBeenCalledWith('run-b', null, 'fk-run-b');
+  });
+
+  it('closes the gallery and shows the thread from a card’s Open chat', async () => {
+    await renderPage();
+    clickOn(needsToggle());
+
+    clickOn(
+      document.body.querySelector(
+        '[data-slot="attention-card"][data-kind="finished"] [data-slot="thread-event-open"]',
+      ),
+    );
+
+    expect(gallery()).toBeNull();
+    expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
+      'run-b',
+    ]);
+  });
+
+  it('still opens the Timeline', async () => {
+    await renderPage();
+
+    clickOn(timelineToggle());
+
+    expect(
+      container.querySelector('[data-slot="command-center-sidebar"]')
+        ?.textContent,
+    ).toContain('Timeline');
   });
 });
 

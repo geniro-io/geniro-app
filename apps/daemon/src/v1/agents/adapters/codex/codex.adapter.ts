@@ -47,6 +47,7 @@ import type {
   DeleteSessionTranscriptResult,
   NativeMemoryReading,
   RecoveredSubagentOutcome,
+  SessionResumability,
   SessionResumableInput,
   SubagentRecoveryRef,
   ToolCallMetric,
@@ -57,6 +58,7 @@ import {
   MCP_CONFIG_MOVED_REASON,
   mcpServerExistsReason,
 } from '../utils/mcp-config.utils';
+import { sessionResumabilityOf } from '../utils/session-prompt.utils';
 import { matchSessions } from '../utils/session-search.utils';
 import { readTitleAnswer, titlePrompt } from '../utils/title-prompt.utils';
 import {
@@ -163,7 +165,7 @@ import {
 } from './utils/codex-subagent-recovery.utils';
 import {
   codexThreadHistory,
-  codexThreadHoldsPrompt,
+  codexThreadUserTexts,
   readCodexThreads,
 } from './utils/codex-threads.utils';
 
@@ -1504,14 +1506,15 @@ export class CodexAdapter extends AgentAdapter {
   }
 
   /**
-   * The thread holds a user message. Measured on 0.172.0: a thread killed
-   * before its first prompt is refused (`thread not loaded`), and one killed
-   * before codex recorded its prompt (1.6–5 s in) reads as one turn with no
-   * items. A read that gets no answer keeps the base's yes.
+   * The thread's user messages, against the asked prompt. Measured on
+   * 0.172.0: a thread killed before its first prompt is refused (`thread not
+   * loaded`), and one killed before codex recorded its prompt (1.6–5 s in)
+   * reads as one turn with no items — after earlier turns, as those turns
+   * alone. A read that gets no answer keeps the base's `resumable`.
    */
   override async sessionResumable(
     input: SessionResumableInput,
-  ): Promise<boolean> {
+  ): Promise<SessionResumability> {
     try {
       const reply = await this.oneshotReply(
         CODEX_METHODS.threadRead,
@@ -1522,11 +1525,17 @@ export class CodexAdapter extends AgentAdapter {
         },
       );
       if (reply === null) {
-        return true;
+        return 'resumable';
       }
-      return reply.ok ? (codexThreadHoldsPrompt(reply.result) ?? true) : false;
+      if (!reply.ok) {
+        return 'unsaved';
+      }
+      const texts = codexThreadUserTexts(reply.result);
+      return texts === null
+        ? 'resumable'
+        : sessionResumabilityOf(texts, input.prompt);
     } catch {
-      return true;
+      return 'resumable';
     }
   }
 

@@ -58,6 +58,7 @@ import type {
   RecoveredSubagentOutcome,
   SessionPullRequest,
   SessionPullRequestsInput,
+  SessionResumability,
   SessionResumableInput,
   SubagentRecoveryRef,
   ToolCallMetric,
@@ -1650,18 +1651,19 @@ export class ClaudeAdapter extends AgentAdapter {
   /**
    * The transcript file exists in the profile. The CLI writes it only once it
    * reads the first prompt, so an id assigned at spawn names nothing on disk
-   * when the process died before that (`CLAUDE_SESSION_ID_FLAG`).
+   * when the process died before that (`CLAUDE_SESSION_ID_FLAG`). The asked
+   * prompt is not looked for in it.
    */
   override async sessionResumable(
     input: SessionResumableInput,
-  ): Promise<boolean> {
-    return (
-      (await findSessionFile(
-        this.profileDir(input.configDir),
-        input.sessionId,
-        input.cwd,
-      )) !== null
-    );
+  ): Promise<SessionResumability> {
+    return (await findSessionFile(
+      this.profileDir(input.configDir),
+      input.sessionId,
+      input.cwd,
+    )) !== null
+      ? 'resumable'
+      : 'unsaved';
   }
 
   /** The `pr-link` lines the session's transcript carries. */

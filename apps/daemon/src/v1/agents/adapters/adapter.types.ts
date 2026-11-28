@@ -4239,11 +4239,24 @@ export interface CarrySessionInput {
 export interface SessionResumableInput {
   /** The conversation, in the CLI's own id namespace. */
   readonly sessionId: string;
+  /**
+   * The prompt the resume must find saved in it — a call's brief on a thread
+   * it continues. Null asks only whether it saved any prompt.
+   */
+  readonly prompt: string | null;
   /** The profile that would resume it — null for the CLI's own default. */
   readonly configDir: string | null;
   /** The folder it ran in, a hint for a CLI that files sessions by folder. */
   readonly cwd: string | null;
 }
+
+/**
+ * What {@link AgentAdapter.sessionResumable} found in the CLI's own store:
+ * `resumable` — it holds the asked prompt, or any prompt when none was asked;
+ * `prompt-missing` — it holds earlier prompts but not the asked one;
+ * `unsaved` — it was never written, or saved no prompt.
+ */
+export type SessionResumability = 'resumable' | 'prompt-missing' | 'unsaved';
 
 /**
  * Whether the conversation followed the run to its new profile.

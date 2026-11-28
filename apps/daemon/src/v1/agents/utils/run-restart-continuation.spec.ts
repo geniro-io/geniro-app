@@ -448,6 +448,20 @@ describe('restartContinuationPrompt', () => {
     );
   });
 
+  it('gives a call its brief again when its resumed session never saved it, without calling the session intact', () => {
+    const prompt = restartContinuationPrompt('quit', {
+      working: 'call',
+      brief: 'New task: reply ZEBRA-1',
+      calls: [],
+      monitors: [],
+    });
+    expect(prompt).not.toContain('Your session is intact');
+    expect(prompt).toContain(
+      "Your session holds this conversation up to this call, but this call's brief never reached it: it is given again below. Check what is already done",
+    );
+    expect(prompt).toMatch(/\n\nThis call's brief:\nNew task: reply ZEBRA-1$/);
+  });
+
   it("tells a conversation that was working that the CLI's stop-and-wait note was geniro's, and to run the interrupted command again", () => {
     const prompt = restartContinuationPrompt('self-update', {
       working: 'turn',

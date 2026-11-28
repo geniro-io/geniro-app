@@ -574,15 +574,17 @@ describe('ClaudeAdapter', () => {
         sessionId: written,
         configDir: profile,
         cwd: '/proj',
+        prompt: null,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe('resumable');
     await expect(
       adapter.sessionResumable({
         sessionId: '99999999-2222-4333-8444-555555555555',
         configDir: profile,
         cwd: '/proj',
+        prompt: null,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe('unsaved');
   });
 
   it('emits turn_cancelled when the process is killed', async () => {

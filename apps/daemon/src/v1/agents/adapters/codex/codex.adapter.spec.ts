@@ -2148,21 +2148,21 @@ describe('CodexAdapter.sessionResumable', () => {
     sessionId: THREAD,
     configDir: '/profiles/codex',
     cwd: '/repo',
+    prompt: null,
   };
   const thread = (turns: unknown[]) =>
     answered({ thread: { id: THREAD, turns } });
-  const prompted = thread([
-    {
-      id: 'u1',
-      items: [
-        {
-          type: 'userMessage',
-          id: 'um',
-          content: [{ type: 'text', text: 'the brief', text_elements: [] }],
-        },
-      ],
-    },
-  ]);
+  const briefTurn = {
+    id: 'u1',
+    items: [
+      {
+        type: 'userMessage',
+        id: 'um',
+        content: [{ type: 'text', text: 'the brief', text_elements: [] }],
+      },
+    ],
+  };
+  const prompted = thread([briefTurn]);
 
   it('resumes a thread holding its prompt, read in the call’s profile from the home folder', async () => {
     const home = mkdtempSync(join(tmpdir(), 'codex-resumable-home-'));
@@ -2178,7 +2178,7 @@ describe('CodexAdapter.sessionResumable', () => {
       adapterWith({ groupSpawnFn: spawnFn, homeDir: home }).sessionResumable(
         input,
       ),
-    ).resolves.toBe(true);
+    ).resolves.toBe('resumable');
     expect(paramsSentFor(server.calls[0]!.stdin, 'thread/read')).toEqual({
       threadId: THREAD,
       includeTurns: true,
@@ -2194,7 +2194,31 @@ describe('CodexAdapter.sessionResumable', () => {
 
     await expect(
       adapterWith({ groupSpawnFn }).sessionResumable(input),
-    ).resolves.toBe(false);
+    ).resolves.toBe('unsaved');
+  });
+
+  it('finds the asked prompt among the thread’s user messages', async () => {
+    const { groupSpawnFn } = oneshotSpawn(prompted);
+
+    await expect(
+      adapterWith({ groupSpawnFn }).sessionResumable({
+        ...input,
+        prompt: 'the brief',
+      }),
+    ).resolves.toBe('resumable');
+  });
+
+  it('reads a thread holding earlier prompts but not the asked one as missing it', async () => {
+    const { groupSpawnFn } = oneshotSpawn(
+      thread([briefTurn, { id: 'u2', status: 'interrupted', items: [] }]),
+    );
+
+    await expect(
+      adapterWith({ groupSpawnFn }).sessionResumable({
+        ...input,
+        prompt: 'the new brief',
+      }),
+    ).resolves.toBe('prompt-missing');
   });
 
   it('does not resume a thread codex refuses to read', async () => {
@@ -2204,7 +2228,7 @@ describe('CodexAdapter.sessionResumable', () => {
 
     await expect(
       adapterWith({ groupSpawnFn }).sessionResumable(input),
-    ).resolves.toBe(false);
+    ).resolves.toBe('unsaved');
   });
 
   it.each(['', '{bad}\n', answered({ thread: null })])(
@@ -2214,7 +2238,7 @@ describe('CodexAdapter.sessionResumable', () => {
 
       await expect(
         adapterWith({ groupSpawnFn }).sessionResumable(input),
-      ).resolves.toBe(true);
+      ).resolves.toBe('resumable');
     },
   );
 
@@ -2225,7 +2249,7 @@ describe('CodexAdapter.sessionResumable', () => {
 
     await expect(
       adapterWith({ groupSpawnFn: spawnFn }).sessionResumable(input),
-    ).resolves.toBe(true);
+    ).resolves.toBe('resumable');
   });
 });
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   codexThreadHistory,
-  codexThreadHoldsPrompt,
+  codexThreadUserTexts,
   readCodexThreads,
 } from './codex-threads.utils';
 
@@ -125,19 +125,31 @@ describe('codexThreadHistory', () => {
   });
 });
 
-describe('codexThreadHoldsPrompt', () => {
+describe('codexThreadUserTexts', () => {
   const userMessage = (text: string) => ({
     type: 'userMessage',
     id: 'um',
     content: [{ type: 'text', text, text_elements: [] }],
   });
 
-  it('holds a prompt once a turn carries the user’s words', () => {
+  it('reads the user’s words of every turn, oldest first', () => {
     expect(
-      codexThreadHoldsPrompt({
-        thread: { id: 't', turns: [{ id: 'u1', items: [userMessage('go')] }] },
+      codexThreadUserTexts({
+        thread: {
+          id: 't',
+          turns: [
+            { id: 'u1', items: [userMessage('go')] },
+            {
+              id: 'u2',
+              items: [
+                { type: 'agentMessage', id: 'am', text: 'hi' },
+                userMessage('again'),
+              ],
+            },
+          ],
+        },
       }),
-    ).toBe(true);
+    ).toEqual(['go', 'again']);
   });
 
   it.each([
@@ -154,10 +166,10 @@ describe('codexThreadHoldsPrompt', () => {
       turns: [{ id: 'u1', items: [userMessage('')] }],
     },
   ])('holds none with $name', ({ turns }) => {
-    expect(codexThreadHoldsPrompt({ thread: { id: 't', turns } })).toBe(false);
+    expect(codexThreadUserTexts({ thread: { id: 't', turns } })).toEqual([]);
   });
 
   it('answers null for a reply carrying no thread', () => {
-    expect(codexThreadHoldsPrompt({})).toBeNull();
+    expect(codexThreadUserTexts({})).toBeNull();
   });
 });

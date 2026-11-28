@@ -344,6 +344,7 @@ import {
 } from '../teams.types';
 import { CALL_START_BRIEF_MAX } from '../teams.types';
 import {
+  callBriefOf,
   callPoolHandOffPrompt,
   conversationStartMember,
   fallsThroughPool,
@@ -1877,16 +1878,24 @@ export class TeamExecutorService
           (a, b) => (callNumber(a.callId) ?? 0) - (callNumber(b.callId) ?? 0),
         )
         .map(async (recorded) => {
-          const call = {
-            ...recorded,
-            sessionId: await this.resumableCallSession(team, recorded, run.cwd),
-          };
+          const resumable = await this.resumableCallSession(
+            team,
+            recorded,
+            run.cwd,
+            recorded.conversationId === recorded.callId
+              ? null
+              : callBriefOf(
+                  await this.itemDao.callRowsOf(runId, [recorded.callId], em),
+                ),
+          );
+          const call = { ...recorded, sessionId: resumable.sessionId };
           const prompt = restartContinuationPrompt(record.cause, {
             working: 'call',
             calls: callsOf(call.calleeMemberId, call.conversationId),
             failedCalls: failedOf(call.calleeMemberId, call.conversationId),
             monitors: monitorsOf(call.calleeMemberId, call.conversationId),
             fresh: call.sessionId === null,
+            brief: resumable.missingBrief,
           });
           return {
             call,
@@ -2127,30 +2136,37 @@ export class TeamExecutorService
    * A cut-off call's saved session, or null when its CLI never wrote it — a
    * session assigned at spawn whose process died before the CLI read its
    * prompt — so the call continues fresh with its transcript excerpt.
+   * `missingBrief` is `brief`, a call on a thread, when its session saved
+   * the thread's earlier prompts but not this one, so it is given again.
    */
   private async resumableCallSession(
     team: Team,
     call: RestartContinuationCall,
     cwd: string | null,
-  ): Promise<string | null> {
+    brief: string | null,
+  ): Promise<{ sessionId: string | null; missingBrief: string | null }> {
     const sessionId = call.sessionId;
     const callee = team.members.find(
       (member) => member.id === call.calleeMemberId,
     );
     if (sessionId === null || callee === undefined) {
-      return sessionId;
+      return { sessionId, missingBrief: null };
     }
     const runner =
       (call.member !== null ? poolMemberNode(callee, call.member) : null) ??
       callee;
-    const resumable = await this.adapterFor(runner.agent)
+    const resumability = await this.adapterFor(runner.agent)
       .sessionResumable({
         sessionId,
         configDir: runner.configDir ?? null,
         cwd,
+        prompt: brief,
       })
-      .catch(() => true);
-    return resumable ? sessionId : null;
+      .catch(() => 'resumable' as const);
+    return {
+      sessionId: resumability === 'unsaved' ? null : sessionId,
+      missingBrief: resumability === 'prompt-missing' ? brief : null,
+    };
   }
 
   /** A cut-off call the continuation could not re-open, closed as today. */

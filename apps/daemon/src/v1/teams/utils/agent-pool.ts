@@ -435,10 +435,7 @@ export function callPoolHandOffPrompt(
   rows: readonly { kind: string; role: string | null; payload: string }[],
   lead = POOL_HANDOFF_LEAD,
 ): string {
-  const firstAsk = rows.find((row) => row.kind === 'call_started');
-  const original = asString(
-    asRecord(parseJsonColumn(firstAsk?.payload))?.message,
-  );
+  const original = callBriefOf(rows);
   return poolTranscriptPrompt(
     original === null
       ? prompt
@@ -446,6 +443,14 @@ export function callPoolHandOffPrompt(
     rows,
     lead,
   );
+}
+
+/** The brief of the first `call_started` row among `rows`. */
+export function callBriefOf(
+  rows: readonly { kind: string; payload: string }[],
+): string | null {
+  const started = rows.find((row) => row.kind === 'call_started');
+  return asString(asRecord(parseJsonColumn(started?.payload))?.message);
 }
 
 function poolTranscriptPrompt(

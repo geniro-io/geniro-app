@@ -8,6 +8,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 
 import { PULL_REQUEST_SCAN_VERSION } from '../../v1/agents/utils/pull-request-capture';
 import { searchIndexText } from '../../v1/agents/utils/searchable-text';
+import { CommandCenterRosterEntry } from '../../v1/command-center/entity/command-center-roster.entity';
 import { Item } from '../../v1/runs/entity/item.entity';
 import { Run } from '../../v1/runs/entity/run.entity';
 import { AgentKind, type ItemKind } from '../../v1/runs/runs.types';
@@ -36,10 +37,10 @@ import { AgentKind, type ItemKind } from '../../v1/runs/runs.types';
  */
 export class UiFixturesSeeder extends Seeder {
   override async run(em: EntityManager): Promise<void> {
-    const cwd = process.env.GENIRO_SEED_CWD ?? process.cwd();
-    await clearPreviousFixtures(em);
+    const cwd = seedCwd();
+    await clearFixtureRuns(em, FIXTURE_ID_PREFIX);
 
-    this.chat(em, {
+    writeChat(em, {
       id: 'untracked-subagents',
       title: 'Sub-agents — tracking lost',
       minutesAgo: 1,
@@ -70,7 +71,7 @@ export class UiFixturesSeeder extends Seeder {
     });
 
     // THREE chips, each narrower than a lone one, plus `All 6`.
-    this.chat(em, {
+    writeChat(em, {
       id: 'shelf-three-open',
       title: 'Shelf — three open pull requests',
       minutesAgo: 4,
@@ -88,7 +89,7 @@ export class UiFixturesSeeder extends Seeder {
     // down with it. The markdown image in
     // the reply above it is the same picture reached the other way, which is
     // what makes the shared zoom viewer comparable between the two.
-    this.chat(em, {
+    writeChat(em, {
       id: 'gallery-card',
       title: 'Gallery — a set of pictures, and the ways a tile can fail',
       minutesAgo: 2,
@@ -134,7 +135,7 @@ export class UiFixturesSeeder extends Seeder {
 
     // ONE wide chip and `All 4` — what a thread on a single branch has always
     // shown, kept here so the change is visibly scoped to the several case.
-    this.chat(em, {
+    writeChat(em, {
       id: 'shelf-one-open',
       title: 'Shelf — one open, three merged',
       minutesAgo: 9,
@@ -145,7 +146,7 @@ export class UiFixturesSeeder extends Seeder {
 
     // NOTHING open: the newest settled one still earns a chip, because "this
     // thread produced this" is worth naming even when nothing is left to do.
-    this.chat(em, {
+    writeChat(em, {
       id: 'shelf-all-settled',
       title: 'Shelf — all settled',
       minutesAgo: 26,
@@ -166,7 +167,7 @@ export class UiFixturesSeeder extends Seeder {
     // says they were detached. Both halves have to be here, or the fixture
     // proves whichever one it happens to contain.
     const shells = writeShellLogs();
-    this.chat(em, {
+    writeChat(em, {
       id: 'shells-detached',
       title: 'Shells — four detached commands',
       minutesAgo: 2,
@@ -199,7 +200,7 @@ export class UiFixturesSeeder extends Seeder {
     // fixture whose run is LIVE (see `status` on `chat`): a delegate reads as
     // running only while the run has not settled, and the count on the
     // sub-agent chip is the running half.
-    this.chat(em, {
+    writeChat(em, {
       id: 'shelf-fan-out',
       title: 'Shelf — a fan-out with a task list',
       minutesAgo: 1,
@@ -249,7 +250,7 @@ export class UiFixturesSeeder extends Seeder {
 
     // What the header gives up first, now the folder chip has left the side
     // that holds the truncating title.
-    this.chat(em, {
+    writeChat(em, {
       id: 'header-long-title',
       title:
         'Header — a deliberately very long conversation title that has to give way before the figures do',
@@ -257,74 +258,6 @@ export class UiFixturesSeeder extends Seeder {
       cwd,
       pullRequests: [OPEN[1]!],
       items: [say('hello'), reply('Hi.'), turnComplete()],
-    });
-  }
-
-  private chat(
-    em: EntityManager,
-    spec: {
-      /** Stable across runs — see {@link clearPreviousFixtures}. */
-      id: string;
-      title: string;
-      minutesAgo: number;
-      cwd: string;
-      /**
-       * `completed` unless the fixture is ABOUT a live thread.
-       *
-       * A `running` row is only true for as long as this daemon lives: the next
-       * boot reconciles every orphaned running chat run to `failed`, on purpose
-       * (`ChatService`), because a run whose process died mid-turn must not sit
-       * there claiming to work. So a fixture that needs one is a re-seed away
-       * rather than permanent — which is fine, since seeding takes a second and
-       * the alternative is a seeder that writes rows the daemon is right to
-       * distrust.
-       */
-      status?: 'completed' | 'running';
-      pullRequests?: PullRequestRef[];
-      items: SeedItem[];
-    },
-  ): void {
-    const at = new Date(Date.now() - spec.minutesAgo * 60_000);
-    const run = em.create(Run, {
-      id: fixtureId(spec.id),
-      status: spec.status ?? 'completed',
-      title: spec.title,
-      cwd: spec.cwd,
-      agentKind: AgentKind.Claude,
-      approval: 'ask',
-      createdAt: at,
-      updatedAt: at,
-      pullRequests:
-        spec.pullRequests === undefined
-          ? null
-          : JSON.stringify(
-              spec.pullRequests.map((ref, index) => ({
-                ...ref,
-                seq: index + 1,
-              })),
-            ),
-      // PAST the transcript, under the current scan version, so the daemon's
-      // own capture pass never reads these fixtures again — they hold no
-      // `gh pr create` for it to find.
-      pullRequestsScannedSeq: 999_999,
-      pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION,
-    });
-    spec.items.forEach((item, index) => {
-      const itemAt = new Date(Date.now() - (item.secondsAgo ?? 0) * 1000);
-      em.create(Item, {
-        runId: run.id,
-        seq: index + 1,
-        kind: item.kind,
-        role: item.role ?? null,
-        payload: JSON.stringify(item.payload),
-        // The one `Item` write that does not go through `persistItemAndEmit`,
-        // so it has to flatten for itself. Without this a seeded conversation
-        // is unsearchable for good, and a developer checking the search
-        // against fixtures would read a working feature as broken.
-        searchText: searchIndexText(item.payload),
-        createdAt: item.secondsAgo === undefined ? at : itemAt,
-        updatedAt: item.secondsAgo === undefined ? at : itemAt,
-      });
     });
   }
 }
@@ -336,7 +269,7 @@ interface PullRequestRef {
   url: string;
 }
 
-interface SeedItem {
+export interface SeedItem {
   kind: ItemKind;
   role?: string | null;
   payload: unknown;
@@ -377,17 +310,17 @@ const MERGED: PullRequestRef[] = [
  */
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..', '..');
 
-const say = (text: string): SeedItem => ({
+export const say = (text: string): SeedItem => ({
   kind: 'message',
   role: 'user',
   payload: { text },
 });
-const reply = (text: string): SeedItem => ({
+export const reply = (text: string): SeedItem => ({
   kind: 'message',
   role: 'assistant',
   payload: { text },
 });
-const turnComplete = (): SeedItem => ({
+export const turnComplete = (): SeedItem => ({
   kind: 'turn_complete',
   payload: { usage: { costUsd: 0.42, durationMs: 21_000 } },
 });
@@ -542,9 +475,10 @@ const taskList = (
  * this seeder wrote fresh UUIDs and left five more fixture chats in the sidebar
  * on every run, which is the same defect one step milder.
  */
-const FIXTURE_ID_PREFIX = 'seed-fixture-';
+export const FIXTURE_ID_PREFIX = 'seed-fixture-';
 
-const fixtureId = (name: string): string => `${FIXTURE_ID_PREFIX}${name}`;
+export const fixtureId = (name: string): string =>
+  `${FIXTURE_ID_PREFIX}${name}`;
 
 /**
  * Drop what a PREVIOUS seed left, and nothing else.
@@ -558,12 +492,17 @@ const fixtureId = (name: string): string => `${FIXTURE_ID_PREFIX}${name}`;
  * runtime state is not a seed's to touch. `usage_events` is an append-only
  * spend ledger the Stats page reads and is exempt even from run teardown;
  * `node_state` belongs to the team executor. Neither has anything to do with
- * these chats.
+ * these chats. The one exception is the command center's roster rows that
+ * name a deleted run: they would point at nothing, and the next seed would
+ * collide with them on the unique thread key.
  */
-async function clearPreviousFixtures(em: EntityManager): Promise<void> {
+export async function clearFixtureRuns(
+  em: EntityManager,
+  prefix: string,
+): Promise<void> {
   const runs = await em.find(
     Run,
-    { id: { $like: `${FIXTURE_ID_PREFIX}%` } },
+    { id: { $like: `${prefix}%` } },
     { fields: ['id'] },
   );
   if (runs.length === 0) {
@@ -571,6 +510,9 @@ async function clearPreviousFixtures(em: EntityManager): Promise<void> {
   }
   const ids = runs.map((run) => run.id);
   await em.nativeDelete(Item, { runId: { $in: ids } });
+  await em.nativeDelete(CommandCenterRosterEntry, {
+    $or: [{ managerRunId: { $in: ids } }, { threadRunId: { $in: ids } }],
+  });
   await em.nativeDelete(Run, { id: { $in: ids } });
   // The identity map still holds what the `find` above loaded, and a
   // `nativeDelete` does not tell it otherwise. Without this, `em.create(Run, {
@@ -580,6 +522,86 @@ async function clearPreviousFixtures(em: EntityManager): Promise<void> {
   // items (with no runs to find, this function returned early and deleted
   // nothing). Measured: 5 runs / 27 items, then 0 / 27, then 5 / 54.
   em.clear();
+}
+
+/** The folder a fixture's chats are filed under: the one the seed runs in, unless `GENIRO_SEED_CWD` names another. */
+export const seedCwd = (): string =>
+  process.env.GENIRO_SEED_CWD ?? process.cwd();
+
+/**
+ * One chat's run row and its transcript, written through the entities.
+ *
+ * `extra` carries what a scenario sets beyond a finished chat: a standing
+ * question or a command center's flag.
+ */
+export function writeChat(
+  em: EntityManager,
+  spec: {
+    /** Stable across runs — see {@link clearFixtureRuns}. */
+    id: string;
+    title: string;
+    minutesAgo: number;
+    cwd: string;
+    /**
+     * `completed` unless the fixture is ABOUT a live thread.
+     *
+     * A `running` row is only true for as long as this daemon lives: the next
+     * boot reconciles every orphaned running chat run to `failed`, on purpose
+     * (`ChatService`), because a run whose process died mid-turn must not sit
+     * there claiming to work. So a fixture that needs one is a re-seed away
+     * rather than permanent — which is fine, since seeding takes a second and
+     * the alternative is a seeder that writes rows the daemon is right to
+     * distrust.
+     */
+    status?: 'completed' | 'running';
+    pullRequests?: PullRequestRef[];
+    items: SeedItem[];
+    extra?: Partial<Pick<Run, 'commandCenter' | 'pendingQuestion'>>;
+  },
+): void {
+  const at = new Date(Date.now() - spec.minutesAgo * 60_000);
+  const run = em.create(Run, {
+    id: fixtureId(spec.id),
+    status: spec.status ?? 'completed',
+    title: spec.title,
+    cwd: spec.cwd,
+    agentKind: AgentKind.Claude,
+    approval: 'ask',
+    createdAt: at,
+    updatedAt: at,
+    pullRequests:
+      spec.pullRequests === undefined
+        ? null
+        : JSON.stringify(
+            spec.pullRequests.map((ref, index) => ({
+              ...ref,
+              seq: index + 1,
+            })),
+          ),
+    // PAST the transcript, under the current scan version, so the daemon's
+    // own capture pass never reads these fixtures again — they hold no
+    // `gh pr create` for it to find.
+    pullRequestsScannedSeq: 999_999,
+    pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION,
+    ...spec.extra,
+  });
+  spec.items.forEach((item, index) => {
+    const itemAt = new Date(Date.now() - (item.secondsAgo ?? 0) * 1000);
+    em.create(Item, {
+      runId: run.id,
+      seq: index + 1,
+      kind: item.kind,
+      role: item.role ?? null,
+      payload: JSON.stringify(item.payload),
+      // The one `Item` write that does not go through `persistItemAndEmit`,
+      // so it has to flatten for itself. Without this a seeded conversation
+      // is unsearchable for good, and a developer checking the search
+      // against fixtures would read a working feature as broken.
+      searchText: searchIndexText(item.payload),
+      createdAt: item.secondsAgo === undefined ? at : itemAt,
+      updatedAt: item.secondsAgo === undefined ? at : itemAt,
+    });
+  });
 }
 
 /**

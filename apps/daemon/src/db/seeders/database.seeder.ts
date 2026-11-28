@@ -2,6 +2,11 @@ import { Seeder } from '@mikro-orm/seeder';
 import type { EntityManager } from '@mikro-orm/sqlite';
 
 import { environment } from '../../environments';
+import {
+  STAND_SCENARIOS_ENV,
+  standScenariosFrom,
+  StandScenariosSeeder,
+} from './stand-scenarios.seeder';
 import { UiFixturesSeeder } from './ui-fixtures.seeder';
 
 /**
@@ -29,7 +34,11 @@ import { UiFixturesSeeder } from './ui-fixtures.seeder';
 export class DatabaseSeeder extends Seeder {
   override async run(em: EntityManager): Promise<void> {
     assertDisposableDatabase();
+    const scenarios = standScenariosFrom(process.env[STAND_SCENARIOS_ENV]);
     await this.call(em, [UiFixturesSeeder]);
+    if (scenarios.length > 0) {
+      await this.call(em, [StandScenariosSeeder], { scenarios });
+    }
   }
 }
 

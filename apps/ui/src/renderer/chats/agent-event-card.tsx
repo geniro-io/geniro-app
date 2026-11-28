@@ -184,7 +184,7 @@ export function EventLine({
   handle = null,
   member = null,
   waiting = false,
-  labelGivesWay = false,
+  headingGivesWay = false,
 }: {
   icon: LucideIcon;
   tone: EventTone;
@@ -193,17 +193,14 @@ export function EventLine({
   handle?: string | null;
   member?: string | null;
   waiting?: boolean;
-  labelGivesWay?: boolean;
+  headingGivesWay?: boolean;
 }): React.JSX.Element {
   const Icon = icon;
   return (
     <p
       className={cn(
-        'min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground',
-        // Text tracks grow in equal shares: a short heading stays whole, a long one leaves the label half.
-        labelGivesWay
-          ? 'grid grid-flow-col grid-cols-[max-content] auto-cols-[minmax(0,max-content)]'
-          : 'flex',
+        'flex min-w-0 items-center text-[11px] leading-4 text-muted-foreground',
+        headingGivesWay ? 'flex-wrap gap-x-1.5 gap-y-0.5' : 'gap-1.5',
       )}>
       <Icon
         aria-hidden="true"
@@ -211,10 +208,10 @@ export function EventLine({
       />
       <span
         data-slot={`${slot}-label`}
-        title={labelGivesWay ? label : undefined}
+        title={headingGivesWay ? label : undefined}
         className={cn(
           'font-medium',
-          labelGivesWay ? 'min-w-0 truncate' : 'shrink-0',
+          headingGivesWay ? 'min-w-0 truncate' : 'shrink-0',
         )}>
         {label}
       </span>
@@ -229,7 +226,11 @@ export function EventLine({
         <span
           data-slot={`${slot}-member`}
           title={member}
-          className="min-w-0 truncate">
+          className={cn(
+            'min-w-0 truncate',
+            // Cut on the label's line down to 6rem, then moved under the label.
+            headingGivesWay && 'max-w-max grow basis-24',
+          )}>
           · {member}
         </span>
       )}

@@ -269,7 +269,7 @@ function DeviceRow({
 
 /**
  * Settings → Remote access — the one screen that shows and controls the LAN
- * gateway (`main/remote/`, see the root `AGENTS.md` → *Constraints*).
+ * gateway (`main/remote/`, see `.claude/rules/network-constraints.md`).
  *
  * It reads its whole picture from ONE call, {@link RemoteAccessState}, and
  * every mutating action (the switch, Regenerate, Revoke) re-reads it rather

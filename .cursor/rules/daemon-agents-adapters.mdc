@@ -26,6 +26,6 @@ alwaysApply: false
 - `chat-metrics` composes only: it hands the adapter `{live, sessionId, configDir}` and each adapter answers from its own channel (`UsageReadChannel`; `account` needs neither a process nor a session).
 - `chat-title`: writes a title only while it is still exactly what this service derived (manual renames are permanent); checks ownership before any spawn. Do not reintroduce asking cursor for a title. claude's title ask is a throwaway `haiku` turn, MCP withheld, temp cwd, once per conversation.
 - `run-teardown` is the ONE delete teardown (cancel, wait, revoke tokens, purge rows with `softDelete` off, drop attachments and artifacts, announce `runDeleted`), shared by chat and team delete.
-  - It never touches the tables exempt from teardown (root `AGENTS.md` → *Storage split*).
+  - It never touches the tables exempt from teardown (`.claude/rules/storage-split.md`).
   - Only an ARCHIVED run's own CLI transcripts are deleted with it (`session-transcripts.service.ts`). It keeps a session another run names, or one that began before the run (an import). It never throws.
 - `utils/`: nothing is named after a CLI. `CliSession.ask` must stay additive (control replies and events never consume each other's lines).

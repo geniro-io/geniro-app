@@ -1104,6 +1104,242 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('latestAgentMessageTextPerRun', () => {
+    async function reply(
+      runId: string,
+      seq: number,
+      role: string,
+      payload: Record<string, unknown>,
+    ): Promise<Item> {
+      return dao.create({
+        runId,
+        seq,
+        kind: 'message',
+        role,
+        payload: JSON.stringify(payload),
+      });
+    }
+
+    it('answers with the run’s newest agent message, not a newer one of the user’s', async () => {
+      await reply('run-a', 0, 'assistant', { text: 'agent reply' });
+      await reply('run-a', 1, 'user', { text: 'and now do this' });
+
+      const texts = await dao.latestAgentMessageTextPerRun(['run-a']);
+
+      expect(texts.get('run-a')).toBe('agent reply');
+    });
+
+    it('skips a DELEGATE’s message — the answer is the parent thread’s', async () => {
+      await reply('run-a', 0, 'assistant', { text: 'parent' });
+      await reply('run-a', 1, 'assistant', {
+        text: 'delegate',
+        parentToolUseId: 'toolu_01',
+      });
+
+      const texts = await dao.latestAgentMessageTextPerRun(['run-a']);
+
+      expect(texts.get('run-a')).toBe('parent');
+    });
+
+    it('skips a message written inside a call', async () => {
+      await reply('run-a', 0, 'assistant', { text: 'parent' });
+      await reply('run-a', 1, 'assistant', {
+        text: 'callee',
+        callId: 'call-13',
+      });
+
+      const texts = await dao.latestAgentMessageTextPerRun(['run-a']);
+
+      expect(texts.get('run-a')).toBe('parent');
+    });
+
+    it('never answers with a soft-deleted message', async () => {
+      await reply('run-a', 0, 'assistant', { text: 'before' });
+      const deleted = await reply('run-a', 1, 'assistant', { text: 'deleted' });
+      await orm.em
+        .fork()
+        .createQueryBuilder(Item)
+        .update({ deletedAt: new Date() })
+        .where({ id: deleted.id })
+        .execute();
+
+      const texts = await dao.latestAgentMessageTextPerRun(['run-a']);
+
+      expect(texts.get('run-a')).toBe('before');
+    });
+
+    it('leaves a run absent when its newest agent message has no text — never falls back to an earlier one', async () => {
+      await reply('run-a', 0, 'assistant', { text: 'early' });
+      await reply('run-a', 1, 'assistant', {});
+      await reply('run-b', 0, 'assistant', { text: 'early b' });
+      await reply('run-b', 1, 'assistant', { text: ' \n\t ' });
+
+      const texts = await dao.latestAgentMessageTextPerRun(['run-a', 'run-b']);
+
+      expect(texts.size).toBe(0);
+    });
+
+    it('omits a run that has no agent message', async () => {
+      await reply('run-a', 0, 'user', { text: 'first question' });
+      await insert('run-b', 0, 'tool_call', JSON.stringify({ name: 'ls' }));
+      await reply('run-c', 0, 'assistant', { text: 'c' });
+
+      const texts = await dao.latestAgentMessageTextPerRun([
+        'run-a',
+        'run-b',
+        'run-c',
+      ]);
+
+      expect([...texts.keys()]).toEqual(['run-c']);
+    });
+
+    it('takes the newest seq first, then the later createdAt, then the larger id', async () => {
+      await orm.em.fork().insertMany(Item, [
+        {
+          id: 'row-z',
+          runId: 'run-a',
+          seq: 0,
+          kind: 'message' as const,
+          role: 'assistant',
+          payload: JSON.stringify({ text: 'older' }),
+          createdAt: new Date(1_000),
+          updatedAt: new Date(1_000),
+        },
+        {
+          id: 'row-a',
+          runId: 'run-a',
+          seq: 0,
+          kind: 'message' as const,
+          role: 'assistant',
+          payload: JSON.stringify({ text: 'later' }),
+          createdAt: new Date(2_000),
+          updatedAt: new Date(2_000),
+        },
+        {
+          id: 'row-y',
+          runId: 'run-b',
+          seq: 0,
+          kind: 'message' as const,
+          role: 'assistant',
+          payload: JSON.stringify({ text: 'higher id' }),
+          createdAt: new Date(3_000),
+          updatedAt: new Date(3_000),
+        },
+        {
+          id: 'row-c',
+          runId: 'run-b',
+          seq: 0,
+          kind: 'message' as const,
+          role: 'assistant',
+          payload: JSON.stringify({ text: 'lower id' }),
+          createdAt: new Date(3_000),
+          updatedAt: new Date(3_000),
+        },
+        {
+          id: 'row-s0',
+          runId: 'run-c',
+          seq: 0,
+          kind: 'message' as const,
+          role: 'assistant',
+          payload: JSON.stringify({ text: 'older seq' }),
+          createdAt: new Date(9_000),
+          updatedAt: new Date(9_000),
+        },
+        {
+          id: 'row-s1',
+          runId: 'run-c',
+          seq: 1,
+          kind: 'message' as const,
+          role: 'assistant',
+          payload: JSON.stringify({ text: 'newer seq' }),
+          createdAt: new Date(1_000),
+          updatedAt: new Date(1_000),
+        },
+      ]);
+
+      const texts = await dao.latestAgentMessageTextPerRun([
+        'run-a',
+        'run-b',
+        'run-c',
+      ]);
+
+      expect(texts.get('run-a')).toBe('later');
+      expect(texts.get('run-b')).toBe('higher id');
+      expect(texts.get('run-c')).toBe('newer seq');
+    });
+
+    it('answers every run of a long chat list with its own newest agent message', async () => {
+      const runIds = Array.from({ length: 1_201 }, (_, i) => `run-${i}`);
+      const at = new Date(1_000);
+      await orm.em.fork().insertMany(
+        Item,
+        runIds.flatMap((runId, i) => [
+          {
+            id: `${runId}-0`,
+            runId,
+            seq: 0,
+            kind: 'message' as const,
+            role: 'assistant',
+            payload: JSON.stringify({ text: `answered ${i}` }),
+            createdAt: at,
+            updatedAt: at,
+          },
+          {
+            id: `${runId}-1`,
+            runId,
+            seq: 1,
+            kind: 'message' as const,
+            role: 'user',
+            payload: JSON.stringify({ text: `asked ${i}` }),
+            createdAt: at,
+            updatedAt: at,
+          },
+        ]),
+      );
+
+      const texts = await dao.latestAgentMessageTextPerRun(runIds);
+
+      expect(texts).toEqual(
+        new Map(runIds.map((runId, i) => [runId, `answered ${i}`])),
+      );
+    });
+
+    it('reads a long chat list in batches, not one statement per run', async () => {
+      const runIds = Array.from({ length: 1_201 }, (_, i) => `run-${i}`);
+      const at = new Date(1_000);
+      await orm.em.fork().insertMany(
+        Item,
+        runIds.map((runId, i) => ({
+          id: `${runId}-0`,
+          runId,
+          seq: 0,
+          kind: 'message' as const,
+          role: 'assistant',
+          payload: JSON.stringify({ text: `answered ${i}` }),
+          createdAt: at,
+          updatedAt: at,
+        })),
+      );
+
+      const sent = await statementsOf(() =>
+        dao.latestAgentMessageTextPerRun(runIds),
+      );
+
+      expect(sent).toBe(4);
+    });
+
+    it('dedupes a run listed twice, and an empty request sends no statement', async () => {
+      await reply('run-a', 0, 'assistant', { text: 'a' });
+
+      const texts = await dao.latestAgentMessageTextPerRun(['run-a', 'run-a']);
+
+      expect([...texts]).toEqual([['run-a', 'a']]);
+      expect(
+        await statementsOf(() => dao.latestAgentMessageTextPerRun([])),
+      ).toBe(0);
+    });
+  });
+
   describe('runPreviews', () => {
     async function runs(...ids: string[]): Promise<void> {
       for (const id of ids) {

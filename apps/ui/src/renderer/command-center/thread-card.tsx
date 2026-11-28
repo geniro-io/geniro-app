@@ -353,7 +353,7 @@ export function ThreadCard({
           })}
           onOpen={onToggleCard}
           aside={
-            attention === 'working' ? <Spinner pace="stepped" /> : undefined
+            attention === 'working' ? <Spinner pace="frames" /> : undefined
           }
           ringClassName="ring-card"
         />

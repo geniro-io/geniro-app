@@ -11,7 +11,7 @@ import { cn } from './utils';
  * `renderer-components.md` forbids — a change to the size or the tone would
  * have had to be made four times and could silently drift between them.
  *
- * `stepped` draws the same arc from an animated picture (`spinner-frames` in
+ * `frames` draws the same arc from an animated picture (`spinner-frames` in
  * `styles/global.css`), for a surface showing many at once: a CSS spin, smooth
  * or in steps, repaints the page around every spinner on each frame it moves,
  * while one picture's frames advance for every copy together. The picture is a
@@ -26,9 +26,9 @@ export function Spinner({
   pace = 'smooth',
 }: {
   className?: string;
-  pace?: 'smooth' | 'stepped';
+  pace?: 'smooth' | 'frames';
 }): React.JSX.Element {
-  if (pace === 'stepped') {
+  if (pace === 'frames') {
     return (
       <span
         aria-hidden="true"

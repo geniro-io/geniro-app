@@ -35,12 +35,12 @@ describe('Spinner', () => {
   it('spins a smooth arc by default', () => {
     const svg = draw(<Spinner />);
     expect(svg.classList.contains('animate-spin')).toBe(true);
-    expect(svg.classList.contains('spinner-stepped')).toBe(false);
+    expect(svg.classList.contains('spinner-frames')).toBe(false);
     expect(svg.classList.contains('lucide-loader-circle')).toBe(true);
   });
 
-  it('draws the same arc from the animated picture when stepped, with no CSS animation at all', () => {
-    const spinner = draw(<Spinner pace="stepped" className="size-4" />);
+  it('draws the same arc from the animated picture at the frames pace, with no CSS animation at all', () => {
+    const spinner = draw(<Spinner pace="frames" className="size-4" />);
     expect(spinner.tagName).toBe('SPAN');
     expect(spinner.classList.contains('spinner-frames')).toBe(true);
     expect(spinner.className).not.toMatch(/animate-/);
@@ -99,7 +99,7 @@ function webpAnimation(file: Buffer): { loops: number; frames: WebpFrame[] } {
   return { loops, frames };
 }
 
-describe("the stepped spinner's picture", () => {
+describe("the frames spinner's picture", () => {
   it('masks the spinner with the animated picture, and shows the still arc instead under reduced motion', () => {
     const rule = cssBlock(GLOBAL_CSS, '.spinner-frames {');
     expect(rule).toMatch(/background-color:\s*currentColor/);

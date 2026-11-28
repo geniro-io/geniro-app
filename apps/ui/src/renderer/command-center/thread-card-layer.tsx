@@ -246,7 +246,7 @@ function CardHead({
           identity={card.identity}
           aside={
             <>
-              {card.attention === 'working' ? <Spinner pace="stepped" /> : null}
+              {card.attention === 'working' ? <Spinner pace="frames" /> : null}
               {open ? (
                 <ShowChatIcon title={title} open onToggle={onClose} />
               ) : null}

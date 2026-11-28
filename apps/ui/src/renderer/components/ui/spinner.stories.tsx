@@ -22,16 +22,16 @@ export const Sizes: Story = {
   ),
 };
 
-export const Stepped: Story = {
-  args: { pace: 'stepped', className: 'size-4' },
+export const Frames: Story = {
+  args: { pace: 'frames', className: 'size-4' },
 };
 
-export const SteppedSizes: Story = {
+export const FramesSizes: Story = {
   render: () => (
     <div className="flex items-center gap-3">
-      <Spinner pace="stepped" className="size-3" />
-      <Spinner pace="stepped" className="size-6" />
-      <Spinner pace="stepped" className="size-12" />
+      <Spinner pace="frames" className="size-3" />
+      <Spinner pace="frames" className="size-6" />
+      <Spinner pace="frames" className="size-12" />
     </div>
   ),
 };

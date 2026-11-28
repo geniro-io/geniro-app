@@ -17,6 +17,7 @@ function row(
     source: '',
     calls,
     subagentCalls: Math.floor(calls / 4),
+    agents: ['claude'],
     errors: Math.floor(calls / 20),
     refused: 0,
     avgDurationMs: 1200,
@@ -39,8 +40,15 @@ const ROWS: ToolUsageRow[] = [
   row('Subagents', 51, { subjectKind: 'capability' }),
   row('review', 30, { subjectKind: 'skill' }),
   row('/compact', 22, { subjectKind: 'command' }),
-  row('Grep', 18),
+  row('Grep', 18, { agents: ['claude', 'codex'] }),
   row('WebFetch', 9),
+];
+
+const LONG_NAME_ROWS: ToolUsageRow[] = [
+  row(`mcp_tool_${'with_a_very_long_name_'.repeat(5)}`, 5000, {
+    source: 'a-server-with-a-long-name',
+  }),
+  ...ROWS,
 ];
 
 const stats = (rows: ToolUsageRow[], fail = false): DaemonApis['stats'] =>
@@ -99,3 +107,8 @@ export const Empty: Story = { args: { api: stats([]) } };
 export const LoadFailed: Story = { args: { api: stats([], true) } };
 
 export const PairedDevice: Story = { args: { remote: true } };
+
+export const NarrowWithLongName: Story = {
+  args: { api: stats(LONG_NAME_ROWS) },
+  decorators: [(story) => <div className="w-80">{story()}</div>],
+};

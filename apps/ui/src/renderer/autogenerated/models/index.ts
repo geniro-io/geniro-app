@@ -21947,13 +21947,19 @@ export interface ToolUsageRow {
      */
     subagentCalls: number;
     /**
-     * 
+     * the CLIs that called it, the most calls first
+     * @type {Array<string>}
+     * @memberof ToolUsageRow
+     */
+    agents: Array<string>;
+    /**
+     * calls that ended in an error, refused ones included
      * @type {number}
      * @memberof ToolUsageRow
      */
     errors: number;
     /**
-     * refusals the daemon attributed: a Geniro tool refused the input, or the user denied the permission
+     * refusals the daemon attributed: a Geniro tool refused the input, or the user denied the permission; such a call usually also ended as an error, so most refusals are counted in errors too
      * @type {number}
      * @memberof ToolUsageRow
      */

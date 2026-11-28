@@ -1547,7 +1547,12 @@ export const ToolUsageRowSchema = z
       ),
     calls: z.number(),
     subagentCalls: z.number().describe('of the calls, made by sub-agents'),
-    errors: z.number(),
+    agents: z
+      .array(z.string())
+      .describe('the CLIs that called it, the most calls first'),
+    errors: z
+      .number()
+      .describe('calls that ended in an error, refused ones included'),
     refused: z
       .number()
       .describe(

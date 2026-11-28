@@ -86,4 +86,36 @@ describe('FigureTable', () => {
       container.querySelectorAll('[data-slot="figure-table-sort"]'),
     ).toHaveLength(2);
   });
+
+  it('becomes a size container only when a column is left out below a width', () => {
+    draw();
+    const wrapper = container.firstElementChild!;
+    expect(wrapper.className).not.toContain('@container');
+
+    act(() => {
+      root.render(
+        <FigureTable
+          columns={[
+            ...COLUMNS,
+            {
+              header: 'Minor',
+              hideBelow: '26rem',
+              cell: (row: Row) => row.calls,
+            },
+          ]}
+          rows={ROWS}
+          rowKey={(row) => row.name}
+          emptyLabel="none"
+          ariaLabel="Tools"
+        />,
+      );
+    });
+
+    expect(container.firstElementChild!.className).toContain('@container');
+    const minor = [...container.querySelectorAll('th, td')].filter((cell) =>
+      cell.className.includes('@[26rem]:table-cell'),
+    );
+    expect(minor).toHaveLength(3);
+    expect(minor.every((cell) => cell.className.includes('hidden'))).toBe(true);
+  });
 });

@@ -21,6 +21,7 @@ interface SubjectId {
 
 interface SubjectTotals extends SubjectId, UsageCounterDelta {
   subagentCalls: number;
+  agentCalls: Map<string, number>;
 }
 
 export interface ToolUsageFold {
@@ -77,11 +78,18 @@ export function subjectTotals(
       subject: row.subject,
       source: row.source,
       subagentCalls: 0,
+      agentCalls: new Map<string, number>(),
       ...emptyDelta(),
     };
     const next = addDelta(held, row);
     next.subagentCalls =
       held.subagentCalls + (row.origin === 'subagent' ? row.calls : 0);
+    if (row.agentKind !== '' && row.calls > 0) {
+      next.agentCalls.set(
+        row.agentKind,
+        (next.agentCalls.get(row.agentKind) ?? 0) + row.calls,
+      );
+    }
     totals.set(id, next);
   }
   return totals;
@@ -99,6 +107,9 @@ function rowOf(
     source: totals.source,
     calls: totals.calls,
     subagentCalls: totals.subagentCalls,
+    agents: [...totals.agentCalls.entries()]
+      .sort(([a, aCalls], [b, bCalls]) => bCalls - aCalls || a.localeCompare(b))
+      .map(([agentKind]) => agentKind),
     errors: totals.errors,
     refused: totals.refused,
     avgDurationMs:
@@ -158,6 +169,7 @@ export function foldToolUsage(input: {
           subject: subject.subject,
           source: subject.source,
           subagentCalls: 0,
+          agentCalls: new Map<string, number>(),
           ...emptyDelta(),
         },
         subject,
@@ -186,6 +198,7 @@ export function foldSubject(input: {
   const total = subjectTotals(input.rows).get(idOf(input.subject)) ?? {
     ...input.subject,
     subagentCalls: 0,
+    agentCalls: new Map<string, number>(),
     ...emptyDelta(),
   };
   const slice = <K extends string>(keyOf: (row: UsageCounterRow) => K) => {

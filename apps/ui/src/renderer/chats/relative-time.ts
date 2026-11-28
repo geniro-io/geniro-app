@@ -27,7 +27,15 @@ export function formatRelativeTime(
   if (days < 7) {
     return `${days}d`;
   }
-  const date = new Date(then);
+  return formatShortDate(iso, now);
+}
+
+/** A day as "Jul 12", with its year when it is not this one: "Jul 12, 2025". Empty when unparseable. */
+export function formatShortDate(iso: string, now: number = Date.now()): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
   const sameYear = date.getFullYear() === new Date(now).getFullYear();
   return date.toLocaleDateString('en-US', {
     month: 'short',

@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_SETTINGS, type Settings } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import { AgentIdentityContext } from '../agent-identity';
 import type {
+  AgentIdentityCapability,
   ToolUsageListDto,
   ToolUsageRow,
   ToolUsageSubjectDto,
@@ -32,6 +34,7 @@ function row(
     source: '',
     calls,
     subagentCalls: 0,
+    agents: [],
     errors: 0,
     refused: 0,
     avgDurationMs: null,
@@ -80,13 +83,22 @@ async function settle(): Promise<void> {
   });
 }
 
+const IDENTITIES = [
+  { agent: 'claude', displayName: 'Claude Code', shortName: 'Claude' },
+  { agent: 'codex', displayName: 'Codex', shortName: 'Codex' },
+] as unknown as AgentIdentityCapability[];
+
 async function renderGroup(
   api: DaemonApis['stats'] | null,
   remote = false,
   client: { onReconnect: (listener: () => void) => () => void } | null = null,
 ): Promise<void> {
   await act(async () => {
-    root.render(<ToolUsageGroup api={api} client={client} remote={remote} />);
+    root.render(
+      <AgentIdentityContext.Provider value={IDENTITIES}>
+        <ToolUsageGroup api={api} client={client} remote={remote} />
+      </AgentIdentityContext.Provider>,
+    );
   });
   await settle();
   await settle();
@@ -165,7 +177,54 @@ describe('ToolUsageGroup', () => {
     expect(
       container.querySelector('[data-slot="tool-usage-more"]')?.textContent,
     ).toBe('+2 more');
-    expect(container.textContent).toContain('Oct 15, 2026');
+    expect(
+      container.querySelector('[data-slot="tool-usage-since"]')?.textContent,
+    ).toBe('Oct 15, 2026 · 10 tools and capabilities');
+    expect(button('Show all 10', container)).toBeDefined();
+  });
+
+  it('shows errors as a share of calls, a high share marked, with the split on hover', async () => {
+    const rows = [
+      row('alpha', 100, { errors: 10, refused: 4 }),
+      row('beta', 100, { errors: 1 }),
+      row('gamma', 10_000, { errors: 1 }),
+    ];
+    await renderGroup(statsApi(async () => listOf({ rows })));
+    const shares = [
+      ...container.querySelectorAll<HTMLElement>(
+        '[data-slot="tool-usage-errors"]',
+      ),
+    ];
+    expect(shares.map((cell) => cell.textContent)).toEqual([
+      '<0.1%',
+      '10%',
+      '1%',
+    ]);
+    expect(shares[1]!.className).toContain('text-destructive');
+    expect(shares[2]!.className).not.toContain('text-destructive');
+    expect(shares[1]!.closest('td')?.title).toBe(
+      '90 ok · 6 failed · 4 refused',
+    );
+  });
+
+  it('cuts a long name inside its cell and leaves out the minor columns on a narrow table', async () => {
+    await renderGroup(
+      statsApi(async () => listOf({ rows: [row('x'.repeat(120), 5)] })),
+    );
+    const nameCell = container.querySelector('tbody td')!;
+    expect(nameCell.className).toContain('max-w-0');
+    expect(nameCell.querySelector('span')?.className).toContain('truncate');
+    const headers = Object.fromEntries(
+      [...container.querySelectorAll('th')].map((cell) => [
+        cell.textContent,
+        cell.className,
+      ]),
+    );
+    expect(headers['Sub-agent']).toContain('@[32rem]:table-cell');
+    expect(headers['Last call']).toContain('@[26rem]:table-cell');
+    expect(headers['First seen']).toContain('@[26rem]:table-cell');
+    expect(headers['Calls']).not.toContain('hidden');
+    expect(headers['Errors']).not.toContain('hidden');
   });
 
   it('reorders the rows when another column header is pressed', async () => {
@@ -179,19 +238,27 @@ describe('ToolUsageGroup', () => {
     expect(names(container)).toEqual(['beta', 'alpha']);
   });
 
-  it('labels a row by its kind and shows its MCP server', async () => {
+  it('names under each row the CLIs that called it, its MCP server or Geniro', async () => {
     const rows = [
-      row('Bash', 5),
-      row('show_ui', 4, { source: 'geniro' }),
-      row('search', 3, { source: 'github' }),
-      row('plan', 2, { subjectKind: 'skill' }),
+      row('Bash', 6, { agents: ['claude', 'codex'] }),
+      row('Glob', 5),
+      row('show_ui', 4, { source: 'geniro', agents: ['claude'] }),
+      row('search', 3, { source: 'github', agents: ['claude'] }),
+      row('plan', 2, { subjectKind: 'skill', agents: ['codex'] }),
+      row('compaction', 1, { subjectKind: 'capability' }),
     ];
     await renderGroup(statsApi(async () => listOf({ rows })));
-    const text = container.textContent ?? '';
-    for (const label of ['CLI tool', 'Geniro tool', 'MCP tool', 'Skill']) {
-      expect(text).toContain(label);
-    }
-    expect(text).toContain('github');
+    const lines = [
+      ...container.querySelectorAll('[data-slot="tool-usage-row"]'),
+    ].map((node) => node.querySelectorAll('span')[1]?.textContent);
+    expect(lines).toEqual([
+      'Claude Code · Codex',
+      'CLI tool',
+      'Geniro',
+      'MCP · github',
+      'Skill · Codex',
+      'Capability',
+    ]);
   });
 
   it('opens the dialog from Show all and filters it by search and by kind', async () => {
@@ -201,7 +268,7 @@ describe('ToolUsageGroup', () => {
       row('plan', 2, { subjectKind: 'skill' }),
     ];
     await renderGroup(statsApi(async () => listOf({ rows })));
-    await press(button('Show all'));
+    await press(button('Show all 3'));
     const dialog = document.querySelector<HTMLElement>(
       '[data-slot="tool-usage-all"]',
     )!;
@@ -297,6 +364,7 @@ describe('ToolUsageGroup', () => {
   it("opens a row's card with the subject's split", async () => {
     const subject = row('Bash', 20, {
       subagentCalls: 5,
+      agents: ['claude'],
       errors: 4,
       refused: 1,
       avgDurationMs: 1500,
@@ -326,15 +394,43 @@ describe('ToolUsageGroup', () => {
     )!;
     const text = card.textContent ?? '';
     expect(text).toContain('20 (5 sub-agent)');
-    expect(text).toContain('3 (1 refused)');
-    expect(text).toContain('16 ok · 3 error · 1 refused');
+    expect(text).toContain('4 (1 refused)');
+    expect(text).toContain('16 ok · 3 failed · 1 refused');
     expect(text).toContain('2s');
     expect(text).toContain('2,048 chars');
-    expect(text).toContain('claude');
+    expect(
+      card.querySelector('[data-slot="tool-card-kind"]')?.textContent,
+    ).toBe('CLI tool · Claude Code');
+    expect(text).toContain('Claude Code');
     expect(text).toContain('Alpha');
     expect(text).toContain('No project');
     expect(text).toContain('Sub-agent');
     expect(text).not.toContain('Offered in sessions');
+  });
+
+  it('counts refused calls in the same Errors figure as the table and the split', async () => {
+    const subject = row('memory_read', 2, {
+      source: 'geniro',
+      agents: ['claude'],
+      errors: 2,
+      refused: 2,
+    });
+    const api = statsApi(async () => listOf({ rows: [subject] }), {
+      row: subject,
+      byAgent: [{ agentKind: 'claude', calls: 2, errors: 2 }],
+      byOrigin: [{ origin: 'direct', calls: 2, errors: 2 }],
+      byProject: [{ projectId: null, name: null, calls: 2, errors: 2 }],
+    });
+    await renderGroup(api);
+    expect(
+      container.querySelector('[data-slot="tool-usage-errors"]')?.textContent,
+    ).toBe('100%');
+    await press(container.querySelector('[data-slot="tool-usage-row"]'));
+    const text =
+      document.querySelector('[data-slot="tool-card"]')?.textContent ?? '';
+    expect(text).toContain('Errors2 (2 refused)');
+    expect(text).toContain('0 ok · 0 failed · 2 refused');
+    expect(text).toContain('2 calls · 2 errors');
   });
 
   it('hides the retention row on a paired device', async () => {
@@ -348,6 +444,9 @@ describe('ToolUsageGroup', () => {
       ),
     ).toBeNull();
     expect(container.textContent).not.toContain('Detailed tool log');
+    expect(
+      container.querySelector('[data-slot="tool-usage-counters"]')?.textContent,
+    ).toBe('Kept for good · one row per tool');
   });
 
   it('writes the retention setting when it changes', async () => {

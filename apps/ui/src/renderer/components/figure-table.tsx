@@ -13,6 +13,10 @@ export interface FigureColumn<Row> {
   title?: (row: Row) => string | undefined;
   /** Takes the width the other columns leave, for a bar drawn in the cell. */
   fill?: boolean;
+  /** Never wider than the width the other columns leave: its cell cuts its own text. */
+  truncate?: boolean;
+  /** Left out while the table is narrower than this, for a figure the table reads without. */
+  hideBelow?: '26rem' | '32rem';
   /** Pressing the header sorts the table by this key, when the table is sortable. */
   sortKey?: string;
 }
@@ -30,9 +34,29 @@ const cellVariants = cva('px-2 py-1.5 align-baseline', {
       end: 'text-right tabular-nums whitespace-nowrap',
     },
     fill: { true: 'w-full', false: '' },
+    truncate: { true: 'max-w-0', false: '' },
+    hideBelow: {
+      none: '',
+      '26rem': 'hidden @[26rem]:table-cell',
+      '32rem': 'hidden @[32rem]:table-cell',
+    },
   },
-  defaultVariants: { align: 'start', fill: false },
+  defaultVariants: {
+    align: 'start',
+    fill: false,
+    truncate: false,
+    hideBelow: 'none',
+  },
 });
+
+function cellClass<Row>(column: FigureColumn<Row>): string {
+  return cellVariants({
+    align: column.align,
+    fill: column.fill,
+    truncate: column.truncate,
+    hideBelow: column.hideBelow ?? 'none',
+  });
+}
 
 /**
  * A compact ruled table of daemon figures: one row per thing measured, one column
@@ -65,7 +89,13 @@ export function FigureTable<Row>({
     );
   }
   return (
-    <div className={cn('min-w-0 overflow-x-auto', className)}>
+    <div
+      className={cn(
+        'min-w-0 overflow-x-auto',
+        columns.some((column) => column.hideBelow !== undefined) &&
+          '@container',
+        className,
+      )}>
       <table
         data-slot="figure-table"
         aria-label={ariaLabel}
@@ -80,10 +110,7 @@ export function FigureTable<Row>({
                   key={column.header}
                   scope="col"
                   aria-sort={sorted ? 'descending' : undefined}
-                  className={cn(
-                    cellVariants({ align: column.align, fill: column.fill }),
-                    'font-medium',
-                  )}>
+                  className={cn(cellClass(column), 'font-medium')}>
                   {sortKey === undefined ? (
                     column.header
                   ) : (
@@ -117,10 +144,7 @@ export function FigureTable<Row>({
                 <td
                   key={column.header}
                   title={column.title?.(row)}
-                  className={cellVariants({
-                    align: column.align,
-                    fill: column.fill,
-                  })}>
+                  className={cellClass(column)}>
                   {column.cell(row)}
                 </td>
               ))}

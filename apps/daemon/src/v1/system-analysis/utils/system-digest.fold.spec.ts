@@ -510,6 +510,7 @@ describe('digestToolUsage', () => {
     source: '',
     calls,
     subagentCalls: 0,
+    agents: [],
     errors: 0,
     refused: 0,
     avgDurationMs: null,

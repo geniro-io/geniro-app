@@ -137,6 +137,7 @@ describe('foldToolUsage', () => {
         subject: 'Read',
         calls: 5,
         subagentCalls: 2,
+        agents: ['claude', 'codex'],
         errors: 1,
         avgDurationMs: 150,
         avgResultChars: 40,
@@ -180,10 +181,11 @@ describe('foldToolUsage', () => {
         entry.calls,
         entry.offeredSessions,
         entry.removalEligible,
+        entry.agents,
       ]),
     ).toEqual([
-      ['compaction', 0, null, false],
-      ['note_thread', 0, 60, true],
+      ['compaction', 0, null, false, []],
+      ['note_thread', 0, 60, true, []],
     ]);
   });
 });

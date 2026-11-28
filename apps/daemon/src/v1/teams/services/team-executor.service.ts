@@ -344,7 +344,7 @@ import {
 } from '../teams.types';
 import { CALL_START_BRIEF_MAX } from '../teams.types';
 import {
-  callBriefOf,
+  callBriefsOf,
   callPoolHandOffPrompt,
   conversationStartMember,
   fallsThroughPool,
@@ -1872,6 +1872,7 @@ export class TeamExecutorService
           );
     };
     const clause = interruptCauseClause(record.cause);
+    const briefsOf = await this.conversationBriefs(runId, record.calls, em);
     const calls = await Promise.all(
       [...record.calls]
         .sort(
@@ -1882,11 +1883,7 @@ export class TeamExecutorService
             team,
             recorded,
             run.cwd,
-            recorded.conversationId === recorded.callId
-              ? null
-              : callBriefOf(
-                  await this.itemDao.callRowsOf(runId, [recorded.callId], em),
-                ),
+            briefsOf.get(recorded.callId) ?? [],
           );
           const call = { ...recorded, sessionId: resumable.sessionId };
           const prompt = restartContinuationPrompt(record.cause, {
@@ -2136,14 +2133,15 @@ export class TeamExecutorService
    * A cut-off call's saved session, or null when its CLI never wrote it — a
    * session assigned at spawn whose process died before the CLI read its
    * prompt — so the call continues fresh with its transcript excerpt.
-   * `missingBrief` is `brief`, a call on a thread, when its session saved
-   * the thread's earlier prompts but not this one, so it is given again.
+   * `missingBrief` is the last of `briefs`, a call on a thread, when its
+   * session saved the thread's earlier prompts but not this one, so it is
+   * given again.
    */
   private async resumableCallSession(
     team: Team,
     call: RestartContinuationCall,
     cwd: string | null,
-    brief: string | null,
+    briefs: readonly string[],
   ): Promise<{ sessionId: string | null; missingBrief: string | null }> {
     const sessionId = call.sessionId;
     const callee = team.members.find(
@@ -2160,13 +2158,47 @@ export class TeamExecutorService
         sessionId,
         configDir: runner.configDir ?? null,
         cwd,
-        prompt: brief,
+        prompts: briefs,
       })
       .catch(() => 'resumable' as const);
     return {
       sessionId: resumability === 'unsaved' ? null : sessionId,
-      missingBrief: resumability === 'prompt-missing' ? brief : null,
+      missingBrief:
+        resumability === 'prompt-missing' ? (briefs.at(-1) ?? null) : null,
     };
+  }
+
+  /**
+   * For each cut-off call on a thread, the briefs of its conversation's calls
+   * up to it, oldest first — what its resumed session should hold, in order.
+   * A first call has none: its session holds no earlier call.
+   */
+  private async conversationBriefs(
+    runId: string,
+    calls: readonly RestartContinuationCall[],
+    em: EntityManager,
+  ): Promise<Map<string, string[]>> {
+    const onThread = calls.filter(
+      (call) => call.conversationId !== call.callId,
+    );
+    if (onThread.length === 0) {
+      return new Map();
+    }
+    const records = readCallSeed(
+      await this.kindRows.rowsOfView(runId, CALL_RECORDS, 'fresh'),
+    ).records;
+    const briefs = new Map<string, string[]>();
+    for (const call of onThread) {
+      const upTo = callNumber(call.callId) ?? 0;
+      const callIds = (
+        callConversation(records, call.callId)?.callIds ?? [call.callId]
+      ).filter((callId) => (callNumber(callId) ?? 0) <= upTo);
+      briefs.set(
+        call.callId,
+        callBriefsOf(await this.itemDao.callRowsOf(runId, callIds, em)),
+      );
+    }
+    return briefs;
   }
 
   /** A cut-off call the continuation could not re-open, closed as today. */

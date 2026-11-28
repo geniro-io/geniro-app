@@ -574,7 +574,7 @@ describe('ClaudeAdapter', () => {
         sessionId: written,
         configDir: profile,
         cwd: '/proj',
-        prompt: null,
+        prompts: [],
       }),
     ).resolves.toBe('resumable');
     await expect(
@@ -582,7 +582,7 @@ describe('ClaudeAdapter', () => {
         sessionId: '99999999-2222-4333-8444-555555555555',
         configDir: profile,
         cwd: '/proj',
-        prompt: null,
+        prompts: [],
       }),
     ).resolves.toBe('unsaved');
   });

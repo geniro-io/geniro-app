@@ -2844,7 +2844,7 @@ export class CursorAcpAdapter extends AgentAdapter {
     return Promise.resolve(
       reading === null
         ? 'resumable'
-        : sessionResumabilityOf(reading.userTexts, input.prompt),
+        : sessionResumabilityOf(reading.userTexts, input.prompts),
     );
   }
 

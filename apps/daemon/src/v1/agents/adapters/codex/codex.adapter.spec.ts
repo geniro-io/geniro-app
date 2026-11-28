@@ -2148,7 +2148,7 @@ describe('CodexAdapter.sessionResumable', () => {
     sessionId: THREAD,
     configDir: '/profiles/codex',
     cwd: '/repo',
-    prompt: null,
+    prompts: [],
   };
   const thread = (turns: unknown[]) =>
     answered({ thread: { id: THREAD, turns } });
@@ -2203,7 +2203,7 @@ describe('CodexAdapter.sessionResumable', () => {
     await expect(
       adapterWith({ groupSpawnFn }).sessionResumable({
         ...input,
-        prompt: 'the brief',
+        prompts: ['the brief'],
       }),
     ).resolves.toBe('resumable');
   });
@@ -2216,7 +2216,7 @@ describe('CodexAdapter.sessionResumable', () => {
     await expect(
       adapterWith({ groupSpawnFn }).sessionResumable({
         ...input,
-        prompt: 'the new brief',
+        prompts: ['the brief', 'the new brief'],
       }),
     ).resolves.toBe('prompt-missing');
   });

@@ -972,7 +972,8 @@ class FakeAdapter {
     if (this.unwrittenSessions.has(input.sessionId)) {
       return 'unsaved';
     }
-    return input.prompt !== null && this.briefLessSessions.has(input.sessionId)
+    return input.prompts.length > 0 &&
+      this.briefLessSessions.has(input.sessionId)
       ? 'prompt-missing'
       : 'resumable';
   }
@@ -18776,7 +18777,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
           sessionId: 'sess-callee',
           configDir: null,
           cwd: dir,
-          prompt: 'New task: reply ZEBRA-1',
+          prompts: ['Reply READY', 'New task: reply ZEBRA-1'],
         },
       ]);
       expect(callee!.input.resumeSessionId).toBe('sess-callee');
@@ -18843,7 +18844,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         .slice(before)
         .find((t) => t.input.prompt.includes('on this call'));
       expect(ctx.claude.resumableAsked).toEqual([
-        { sessionId: 'sess-callee', configDir: null, cwd: dir, prompt: null },
+        { sessionId: 'sess-callee', configDir: null, cwd: dir, prompts: [] },
       ]);
       expect(callee!.input.resumeSessionId ?? null).toBeNull();
       expect(callee!.input.prompt).not.toContain('Your session is intact');
@@ -18903,7 +18904,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
           sessionId: 'sess-member-2',
           configDir: profile,
           cwd: dir,
-          prompt: null,
+          prompts: [],
         },
       ]);
       expect(callee!.input.configDir).toBe(profile);

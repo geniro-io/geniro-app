@@ -2288,7 +2288,7 @@ describe('CursorAcpAdapter.sessionResumable', () => {
 
   function resumable(
     prepare: (store: string) => void,
-    prompt: string | null = null,
+    prompts: readonly string[] = [],
   ): Promise<SessionResumability> {
     const store = mkdtempSync(join(tmpdir(), 'cursor-resumable-store-'));
     stores.push(store);
@@ -2300,7 +2300,7 @@ describe('CursorAcpAdapter.sessionResumable', () => {
       sessionId: 's',
       configDir: null,
       cwd: '/proj',
-      prompt,
+      prompts,
     });
   }
 
@@ -2309,14 +2309,14 @@ describe('CursorAcpAdapter.sessionResumable', () => {
   });
 
   it('finds the asked prompt inside the saved user query', async () => {
-    await expect(resumable(saveConversation, 'ship it')).resolves.toBe(
+    await expect(resumable(saveConversation, ['ship it'])).resolves.toBe(
       'resumable',
     );
   });
 
   it('reads a store holding earlier prompts but not the asked one as missing it', async () => {
     await expect(
-      resumable(saveConversation, 'New task: reply ZEBRA-1'),
+      resumable(saveConversation, ['ship it', 'New task: reply ZEBRA-1']),
     ).resolves.toBe('prompt-missing');
   });
 

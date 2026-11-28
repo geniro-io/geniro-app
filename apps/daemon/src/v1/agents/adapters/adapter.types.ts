@@ -4240,10 +4240,11 @@ export interface SessionResumableInput {
   /** The conversation, in the CLI's own id namespace. */
   readonly sessionId: string;
   /**
-   * The prompt the resume must find saved in it — a call's brief on a thread
-   * it continues. Null asks only whether it saved any prompt.
+   * The briefs of the calls a thread's session served, oldest first, ending
+   * with the one the resume must find saved in it. Empty asks only whether it
+   * saved any prompt.
    */
-  readonly prompt: string | null;
+  readonly prompts: readonly string[];
   /** The profile that would resume it — null for the CLI's own default. */
   readonly configDir: string | null;
   /** The folder it ran in, a hint for a CLI that files sessions by folder. */

@@ -450,7 +450,21 @@ export function callBriefOf(
   rows: readonly { kind: string; payload: string }[],
 ): string | null {
   const started = rows.find((row) => row.kind === 'call_started');
-  return asString(asRecord(parseJsonColumn(started?.payload))?.message);
+  return started === undefined ? null : startedBrief(started);
+}
+
+/** The briefs of the `call_started` rows among `rows`, in their order. */
+export function callBriefsOf(
+  rows: readonly { kind: string; payload: string }[],
+): string[] {
+  return rows.flatMap((row) => {
+    const brief = row.kind === 'call_started' ? startedBrief(row) : null;
+    return brief === null ? [] : [brief];
+  });
+}
+
+function startedBrief(row: { payload: string }): string | null {
+  return asString(asRecord(parseJsonColumn(row.payload))?.message);
 }
 
 function poolTranscriptPrompt(

@@ -649,8 +649,8 @@ export abstract class AgentAdapter {
    * with its prompt in it — `unsaved` when the CLI's own store shows it was
    * never written or saved no prompt, as for a session whose process died
    * before or just after the CLI read its first prompt; `prompt-missing`
-   * when it saved earlier prompts but not `input.prompt`, as for a call on
-   * a thread cut off before the CLI saved its new brief.
+   * when it saved earlier prompts but not the last of `input.prompts`, as
+   * for a call on a thread cut off before the CLI saved its new brief.
    *
    * The default is `resumable`, which is what every caller did before
    * asking: a CLI that has not measured where it keeps sessions is resumed as

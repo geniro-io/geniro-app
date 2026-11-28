@@ -457,8 +457,9 @@ describe('restartContinuationPrompt', () => {
     });
     expect(prompt).not.toContain('Your session is intact');
     expect(prompt).toContain(
-      "Your session holds this conversation up to this call, but this call's brief never reached it: it is given again below. Check what is already done",
+      "Your session holds this conversation up to this call, but this call's brief never reached it: it is given again below. Check what is already done, then carry on and answer the call.",
     );
+    expect(prompt).not.toContain('run the interrupted command again');
     expect(prompt).toMatch(/\n\nThis call's brief:\nNew task: reply ZEBRA-1$/);
   });
 

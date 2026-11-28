@@ -1533,7 +1533,7 @@ export class CodexAdapter extends AgentAdapter {
       const texts = codexThreadUserTexts(reply.result);
       return texts === null
         ? 'resumable'
-        : sessionResumabilityOf(texts, input.prompt);
+        : sessionResumabilityOf(texts, input.prompts);
     } catch {
       return 'resumable';
     }

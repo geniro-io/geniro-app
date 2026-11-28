@@ -60,16 +60,17 @@ function stringField(
 }
 
 /**
- * The member turns a transcript leaves open, paired per (member, call) the way the
- * renderer counts them: every `running` row opens one, every terminal row
- * settles one, and a terminal row with nothing open settles nothing.
+ * The member turns a transcript leaves open, one per (member, call) the way the
+ * renderer folds them (`computeAgentActivity`): a `running` row opens it, a
+ * second one while it is open is the same turn (a wake, a pool hand-on), and a
+ * terminal row settles it.
  *
  * The renderer reads a member's liveness off these rows BEFORE the daemon's
  * `node_state` row, so a turn a killed daemon never settled here keeps its
  * card spinning under a run the boot reconcile already failed.
  */
 export function openNodeTurns(items: readonly Item[]): OpenNodeTurn[] {
-  const open = new Map<string, { turn: OpenNodeTurn; count: number }>();
+  const open = new Map<string, OpenNodeTurn>();
   for (const item of items) {
     if (item.kind !== 'status' || item.memberId === null) {
       continue;
@@ -81,24 +82,13 @@ export function openNodeTurns(items: readonly Item[]): OpenNodeTurn[] {
     }
     const callId = stringField(payload, 'callId');
     const key = JSON.stringify([item.memberId, callId]);
-    const entry = open.get(key) ?? {
-      turn: { memberId: item.memberId, callId },
-      count: 0,
-    };
     if (status === 'running') {
-      entry.count += 1;
+      open.set(key, { memberId: item.memberId, callId });
     } else if (TERMINAL_STATUSES.has(status)) {
-      entry.count = Math.max(0, entry.count - 1);
-    }
-    open.set(key, entry);
-  }
-  const turns: OpenNodeTurn[] = [];
-  for (const { turn, count } of open.values()) {
-    for (let i = 0; i < count; i += 1) {
-      turns.push(turn);
+      open.delete(key);
     }
   }
-  return turns;
+  return [...open.values()];
 }
 
 /**

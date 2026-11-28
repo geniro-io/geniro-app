@@ -6282,7 +6282,7 @@ export class TeamExecutorService
       pool: {
         /** The settings holding the member's own conversation. */
         stamp: TeamMember;
-        /** False for a later attempt: the call's first one already said so. */
+        /** False for a launch the pool retries on its next member: the first launch already said so. */
         announce: boolean;
       } = { stamp: node, announce: true },
     ): void => {
@@ -6301,8 +6301,9 @@ export class TeamExecutorService
           },
           em,
         );
-        // One `running` row per turn the call starts: an attempt the pool
-        // hands on writes no ending, so the one after it writes no start.
+        // A wake and a pool hand-on start turns of their own and say so too:
+        // every reader takes a second `running` on an open stretch as that
+        // same stretch.
         if (pool.announce) {
           await persistItem(node.id, 'status', null, {
             nodeId: node.id,
@@ -9455,12 +9456,6 @@ export class TeamExecutorService
       const runAttempt = async (
         callee: TeamMember,
         member: number | undefined,
-        /**
-         * Whether this attempt starts a turn of its own: the call's first
-         * attempt and every wake of a held call do; an attempt the pool hands
-         * the call on to does not, since the one before it wrote no ending.
-         */
-        startsTurn: boolean,
         prompt: string,
         resumeSessionId: string | null,
         /** Null for the last attempt, which nothing can hand on. */
@@ -9516,7 +9511,7 @@ export class TeamExecutorService
                         teamMember,
                         nodePoolMembers.get(callee.id) ?? 1,
                       )!,
-                  announce: startsTurn,
+                  announce: true,
                 }
               : undefined,
           );
@@ -9848,7 +9843,7 @@ export class TeamExecutorService
           first: CalleeTurnOutcome,
           firstHold: Promise<CallHoldRelease> | null,
           asReported: (outcome: CalleeTurnOutcome) => CalleeTurnOutcome,
-          handsOn: Parameters<typeof runAttempt>[5],
+          handsOn: Parameters<typeof runAttempt>[4],
         ): Promise<{ outcome: CalleeTurnOutcome; handedOn: boolean }> => {
           let reported = first;
           let pending = firstHold;
@@ -9923,7 +9918,6 @@ export class TeamExecutorService
             const woken = await runAttempt(
               node,
               member,
-              true,
               // What was sent between the wake and its turn's start — the
               // caller's queued messages first, as a held wake orders them —
               // and the note that the reply is the result, said last.
@@ -10062,7 +10056,7 @@ export class TeamExecutorService
                     member: attempt.member,
                     ...(skipped.length > 0 ? { poolSkipped: skipped } : {}),
                   };
-            const handsOn: Parameters<typeof runAttempt>[5] = isLast
+            const handsOn: Parameters<typeof runAttempt>[4] = isLast
               ? null
               : (result, madeToolCalls) => {
                   const handing =
@@ -10078,7 +10072,6 @@ export class TeamExecutorService
             const attempted = await runAttempt(
               attempt.node,
               member,
-              index === 0,
               attemptPrompt,
               attemptSession,
               handsOn,

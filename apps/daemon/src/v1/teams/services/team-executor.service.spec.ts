@@ -10936,6 +10936,39 @@ describe('TeamExecutorService — agent calls', () => {
       },
     );
 
+    it('starts a pooled callee’s hand-on turn with a running row of its own, after the failed turn ended', async () => {
+      const { claude, cursor, eng, res, itemDao } =
+        await engineerDelegating(true);
+      const engineerRunning = (): number =>
+        itemDao.items.filter((item) => {
+          const payload = JSON.parse(item.payload) as Record<string, unknown>;
+          return (
+            item.kind === 'status' &&
+            item.memberId === 'eng' &&
+            payload.status === 'running' &&
+            payload.callId === 'call-1'
+          );
+        }).length;
+      completeTurn(eng, 'Research is still running.');
+      await drain();
+      completeTurn(res, 'Use the red theme.');
+      await drain();
+      const resumed = claude.starts[3]!;
+      resumed.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      resumed.finish();
+      await drain();
+
+      expect(cursor.starts).toHaveLength(1);
+      expect(engineerRunning()).toBe(3);
+      completeTurn(cursor.starts[0]!, 'Built it.');
+      await drain();
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
     it('tells the last callee in a chain where its answer goes, as its own part ahead of the “May call” block', async () => {
       const { res } = await engineerDelegating();
 
@@ -13313,8 +13346,8 @@ describe('TeamExecutorService — agent calls', () => {
         .map((payload) => payload.status)
         .filter((status) => status !== 'running');
       expect(endings).toEqual(['completed']);
-      // …and ONE start: the renderer balances a call's `running` rows against
-      // its endings, so a second start would leave the callee working forever.
+      // …and a start for each member's turn: member 2's hand-on is a turn of
+      // its own, which every reader keys onto the call's one open stretch.
       const starts = rows
         .filter((row) => row.kind === 'status')
         .map((row) => JSON.parse(row.payload) as Record<string, unknown>)
@@ -13322,7 +13355,7 @@ describe('TeamExecutorService — agent calls', () => {
           (payload) =>
             payload.callId !== undefined && payload.status === 'running',
         );
-      expect(starts).toHaveLength(1);
+      expect(starts).toHaveLength(2);
 
       completeTurn(claude.starts[0]!, 'done');
       await drain();
@@ -13425,7 +13458,7 @@ describe('TeamExecutorService — agent calls', () => {
           .map((row) => JSON.parse(row.payload) as Record<string, unknown>)
           .filter((payload) => payload.callId === 'call-3')
           .map((payload) => payload.status),
-      ).toEqual(['running', 'completed']);
+      ).toEqual(['running', 'running', 'completed']);
       expect(rows.some((row) => row.payload.includes('"resetWake"'))).toBe(
         false,
       );

@@ -11,6 +11,20 @@ export const TERMINAL_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The `status` values that end a team node's call: after one, the node's
+ * off-turn stretch is over.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/utils/wall-worked.ts` →
+ * `ENDING_STATUSES`.
+ */
+export const ENDING_STATUSES: ReadonlySet<string> = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'skipped',
+]);
+
+/**
  * Whether this row ENDED a run-level turn — a terminal kind, not a workflow
  * node's own, and not a continuation result that arrived inside a turn.
  *

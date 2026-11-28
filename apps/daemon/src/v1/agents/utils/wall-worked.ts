@@ -43,6 +43,11 @@ import { usageFiguresFrom } from './usage-figures';
  *   stretch's start, idle gap included. A normal turn writes its
  *   `turn_complete` before its ending status, so nothing it measures moves. A
  *   chat writes no status rows, so this has nothing to act on there.
+ * - Nodes: the renderer also opens a member's turn at its first working row
+ *   (`tool_call`, reasoning, assistant message) after its turn ended, when no
+ *   `running` row opens it: a member woken inside a call it still holds. This
+ *   scan has no start for such a turn, so it is measured only by the CLI's own
+ *   `durationMs`, and left out when there is none.
  * - Only a `turn_complete` is measured. A turn ending in `error` or
  *   `turn_cancelled` closes unmeasured, which is the CLI-timed path's rule for
  *   claude (only a `turn_complete` carries a duration to add).

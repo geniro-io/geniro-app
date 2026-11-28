@@ -53,6 +53,11 @@ export const SPAN_ROW_KINDS = [
  * `running` row reaches back from its end by the CLI's own `durationMs`; a turn
  * with neither is left out: a stretch nothing measured is not invented.
  *
+ * The renderer's live clock also opens a member's turn at its first working row
+ * after its turn ended, when no `running` row does (a member woken inside a call
+ * it still holds). That turn is one of the no-`running`-row turns above, so the
+ * live stretch and this span end at the same `turn_complete`.
+ *
  * The union then loses every {@link pausedSpansFrom} stretch — a card waiting
  * on the user with no background work running: an open turn does not count as
  * work through it.

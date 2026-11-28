@@ -192,7 +192,11 @@ export const ThreadEventCard = memo(function ThreadEventCard({
       }
       text={shownText}
       memoryKey={memoryKey}
-      body={kind === 'done' ? <ThreadDonePages runId={runId} /> : undefined}
+      body={
+        kind === 'done' ? (
+          <ThreadDonePages runId={runId} finishedAt={at} />
+        ) : undefined
+      }
       foot={
         kind !== 'done' ? undefined : (
           <ThreadFoot slot="thread-event" at={at}>

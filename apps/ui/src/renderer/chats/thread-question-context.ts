@@ -54,12 +54,14 @@ export interface ThreadContextReader {
   /**
    * The thread run's pages at their newest version, as its listing names them.
    * Read again when a kept listing lacks a `wanted` page or holds it at an
-   * older version. Rejects when the listing cannot be read; a page missing from
-   * it is gone.
+   * older version, or was not read for the finish `finishedAt` names, since
+   * the thread may have published pages before that finish. Rejects when the
+   * listing cannot be read; a page missing from it is gone.
    */
   artifacts(
     threadRunId: string,
     wanted?: readonly { artifactId: string; version: number }[],
+    finishedAt?: string,
   ): Promise<PublishedArtifact[]>;
   artifactUrl(threadRunId: string): ArtifactUrlBuilder;
   loadImage(threadRunId: string): LocalImageLoader;
@@ -184,7 +186,10 @@ export function threadContextReaderOf(
   >,
   handle: DaemonHandle,
 ): ThreadContextReader {
-  const listings = new Map<string, Promise<PublishedArtifact[]>>();
+  const listings = new Map<
+    string,
+    { pages: Promise<PublishedArtifact[]>; finishes: ReadonlySet<string> }
+  >();
   const holds = (
     pages: readonly PublishedArtifact[],
     wanted: readonly { artifactId: string; version: number }[],
@@ -198,19 +203,33 @@ export function threadContextReaderOf(
   const listed = async (
     threadRunId: string,
     wanted: readonly { artifactId: string; version: number }[] = [],
+    finishedAt?: string,
   ): Promise<PublishedArtifact[]> => {
-    const known = await listings.get(threadRunId)?.catch(() => null);
-    if (known !== undefined && known !== null && holds(known, wanted)) {
+    const kept = listings.get(threadRunId);
+    const known = await kept?.pages.catch(() => null);
+    if (
+      known !== undefined &&
+      known !== null &&
+      holds(known, wanted) &&
+      (finishedAt === undefined || kept?.finishes.has(finishedAt) === true)
+    ) {
       return known;
     }
-    const listing = chats
+    const pages = chats
       .readRunArtifacts({ runId: threadRunId })
       .then(({ artifacts }) => artifacts.map(publishedOf));
+    const finishes = new Set(kept?.finishes);
+    if (finishedAt !== undefined) {
+      finishes.add(finishedAt);
+    }
+    const listing = { pages, finishes };
     listings.set(threadRunId, listing);
-    listing.catch(() => {
-      listings.delete(threadRunId);
+    pages.catch(() => {
+      if (listings.get(threadRunId) === listing) {
+        listings.delete(threadRunId);
+      }
     });
-    return listing;
+    return pages;
   };
   return {
     read: async (threadRunId, threadRequestId) => {

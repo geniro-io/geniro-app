@@ -22,13 +22,17 @@ function donePagesSetOf(
 /**
  * The pages a finished thread published, as chips that open each one — read
  * from the thread's own listing, so the card shows what the thread made
- * without opening its chat. Draws nothing while the listing is read, when it
- * cannot be, or when the thread published none.
+ * without opening its chat. The listing is read for the finish `finishedAt`
+ * names, so a thread that published pages after an earlier finish shows them.
+ * Draws nothing while the listing is read, when it cannot be, or when the
+ * thread published none.
  */
 export function ThreadDonePages({
   runId,
+  finishedAt,
 }: {
   runId: string;
+  finishedAt: string | null;
 }): React.JSX.Element | null {
   const reader = useContext(ThreadContextReaderContext);
   const [read, setRead] = useState<{
@@ -40,7 +44,7 @@ export function ThreadDonePages({
       return undefined;
     }
     let live = true;
-    reader.artifacts(runId).then(
+    reader.artifacts(runId, [], finishedAt ?? undefined).then(
       (pages) => {
         if (live) {
           setRead({ runId, pages });
@@ -55,7 +59,7 @@ export function ThreadDonePages({
     return () => {
       live = false;
     };
-  }, [reader, runId]);
+  }, [reader, runId, finishedAt]);
   if (read === null || read.runId !== runId || read.pages.length === 0) {
     return null;
   }

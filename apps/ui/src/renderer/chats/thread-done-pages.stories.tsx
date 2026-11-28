@@ -15,7 +15,7 @@ const page = (artifactId: string, title: string) => ({
 const meta = {
   title: 'Chats/ThreadDonePages',
   component: ThreadDonePages,
-  args: { runId: 'run-1' },
+  args: { runId: 'run-1', finishedAt: '2026-11-28T10:00:00.000Z' },
   decorators: [
     (story) => (
       <ThreadContextReaderContext.Provider

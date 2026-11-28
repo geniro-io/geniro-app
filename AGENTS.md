@@ -126,7 +126,20 @@ GENIRO_USER_DATA="$HOME/Library/Application Support/Geniro-dev" \
   pnpm --filter @geniro/daemon seed
 ```
 
-Seed rules: `apps/daemon/AGENTS.md`.
+Seed rules: `apps/daemon/AGENTS.md`. `GENIRO_SEED_SCENARIOS=waiting-question,working-threads,long-transcript` (or `all`) adds those states to the default fixtures.
+
+### A local stand (macOS)
+
+A worktree's own Electron app and daemon on a scratch profile, beside the installed Geniro. One command per action, from any directory:
+
+```bash
+node scripts/stand/boot.mjs <worktree> [--slot k] [--seed <scenarios>] [--fresh]   # prints one JSON line: pids, ports, profile, log
+node scripts/stand/cdp.mjs <cdp port> eval|shot|click|text-click|reload|raw|width|tab …
+node scripts/stand/stop.mjs <worktree> [--dry-run]                                  # explicit PIDs from the printed list only
+```
+
+- Slot k is daemon port 47625+10k and CDP port 9333+10k; `boot.mjs` takes the lowest free one, builds the daemon, waits on `/health/check` and the vite URL, and turns onboarding off. The profile lives under `$TMPDIR/geniro-stands/`, never the real one.
+- `stop.mjs` refuses the main checkout and any path that is not a linked worktree, and signals only processes started in the worktree and their children, never its caller, an agent CLI or anything under `/Applications`.
 
 ### Before finishing any work
 

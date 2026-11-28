@@ -6301,8 +6301,8 @@ export class TeamExecutorService
           },
           em,
         );
-        // One `running` row per CALL, balanced by its one ending: an attempt
-        // the pool hands on writes no ending, so a later one writes no start.
+        // One `running` row per turn the call starts: an attempt the pool
+        // hands on writes no ending, so the one after it writes no start.
         if (pool.announce) {
           await persistItem(node.id, 'status', null, {
             nodeId: node.id,
@@ -9455,8 +9455,12 @@ export class TeamExecutorService
       const runAttempt = async (
         callee: TeamMember,
         member: number | undefined,
-        /** Whether this is the call's first attempt. */
-        first: boolean,
+        /**
+         * Whether this attempt starts a turn of its own: the call's first
+         * attempt and every wake of a held call do; an attempt the pool hands
+         * the call on to does not, since the one before it wrote no ending.
+         */
+        startsTurn: boolean,
         prompt: string,
         resumeSessionId: string | null,
         /** Null for the last attempt, which nothing can hand on. */
@@ -9512,7 +9516,7 @@ export class TeamExecutorService
                         teamMember,
                         nodePoolMembers.get(callee.id) ?? 1,
                       )!,
-                  announce: first,
+                  announce: startsTurn,
                 }
               : undefined,
           );
@@ -9919,7 +9923,7 @@ export class TeamExecutorService
             const woken = await runAttempt(
               node,
               member,
-              false,
+              true,
               // What was sent between the wake and its turn's start — the
               // caller's queued messages first, as a held wake orders them —
               // and the note that the reply is the result, said last.

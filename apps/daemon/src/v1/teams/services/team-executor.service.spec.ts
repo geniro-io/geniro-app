@@ -10903,6 +10903,39 @@ describe('TeamExecutorService — agent calls', () => {
       await drain();
     });
 
+    it.each([
+      ['an unpooled', false],
+      ['a pooled', true],
+    ])(
+      'opens %s callee’s woken turn with a running row of its own, so the team clock measures it',
+      async (_label, pooled) => {
+        const { claude, eng, res, itemDao } = await engineerDelegating(pooled);
+        const engineerRunning = (): number =>
+          itemDao.items.filter((item) => {
+            const payload = JSON.parse(item.payload) as Record<string, unknown>;
+            return (
+              item.kind === 'status' &&
+              item.memberId === 'eng' &&
+              payload.status === 'running' &&
+              payload.callId === 'call-1'
+            );
+          }).length;
+        expect(engineerRunning()).toBe(1);
+        completeTurn(eng, 'research dispatched');
+        await drain();
+
+        completeTurn(res, 'RESEARCH RESULT');
+        await drain();
+
+        expect(claude.starts[3]!.input.resumeSessionId).toBe('s-eng');
+        expect(engineerRunning()).toBe(2);
+        completeTurn(claude.starts[3]!, 'REPORT WITH RESEARCH');
+        await drain();
+        completeTurn(claude.starts[0]!, 'done');
+        await drain();
+      },
+    );
+
     it('tells the last callee in a chain where its answer goes, as its own part ahead of the “May call” block', async () => {
       const { res } = await engineerDelegating();
 

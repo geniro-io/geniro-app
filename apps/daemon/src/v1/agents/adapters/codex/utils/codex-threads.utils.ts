@@ -93,20 +93,20 @@ export function codexThreadHistory(
 }
 
 /**
- * Whether a `thread/read` result read with its turns holds a user message,
- * or null when it names no thread.
+ * The text of every user message a `thread/read` result read with its turns
+ * holds, oldest first, or null when it names no thread.
  */
-export function codexThreadHoldsPrompt(result: unknown): boolean | null {
+export function codexThreadUserTexts(result: unknown): string[] | null {
   const thread = asRecord(asRecord(result)?.thread);
   if (thread === null) {
     return null;
   }
-  return asArray(thread.turns).some((turn) =>
-    asArray(asRecord(turn)?.items).some((entry) => {
+  return asArray(thread.turns).flatMap((turn) =>
+    asArray(asRecord(turn)?.items).flatMap((entry) => {
       const item = readCodexItem(entry);
-      return (
-        item?.type === 'userMessage' && userMessageText(item.record) !== ''
-      );
+      const text =
+        item?.type === 'userMessage' ? userMessageText(item.record) : '';
+      return text === '' ? [] : [text];
     }),
   );
 }

@@ -46,6 +46,7 @@ import type {
   InstalledApprovalSupport,
   LiveStreamSupport,
   SessionCloseCause,
+  SessionResumability,
   SessionResumableInput,
   TurnInstructionInput,
 } from '../../agents/adapters/adapter.types';
@@ -953,18 +954,28 @@ class FakeAdapter {
   sessionsOpened = 0;
   /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
   throwNextStart: Error | null = null;
-  /** Session ids this CLI never wrote, so `sessionResumable` answers no. */
+  /** Session ids this CLI never wrote, so `sessionResumable` answers `unsaved`. */
   readonly unwrittenSessions = new Set<string>();
+  /** Session ids that saved no asked prompt, so `sessionResumable` answers `prompt-missing` when one is asked. */
+  readonly briefLessSessions = new Set<string>();
   /** Every `sessionResumable` the executor asked, in order. */
   readonly resumableAsked: SessionResumableInput[] = [];
   /** When set, `sessionResumable` rejects with it. */
   resumableFailure: Error | null = null;
-  async sessionResumable(input: SessionResumableInput): Promise<boolean> {
+  async sessionResumable(
+    input: SessionResumableInput,
+  ): Promise<SessionResumability> {
     this.resumableAsked.push(input);
     if (this.resumableFailure !== null) {
       throw this.resumableFailure;
     }
-    return !this.unwrittenSessions.has(input.sessionId);
+    if (this.unwrittenSessions.has(input.sessionId)) {
+      return 'unsaved';
+    }
+    return input.prompts.length > 0 &&
+      this.briefLessSessions.has(input.sessionId)
+      ? 'prompt-missing'
+      : 'resumable';
   }
 
   /**
@@ -18654,8 +18665,28 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         completeTurn(ctx.claude.starts.at(-1)!, 'collected');
         await drain();
       }
+      if (runCallee === undefined) {
+        ctx.callContextDao.sessions.set('call-1', ['sess-callee']);
+      }
+      return cutOffAt(ctx, run, 'call-1', leadCutOff, cause);
+    }
+
+    /**
+     * The rows a stop after `callId` opened leave behind — its call and its
+     * callee's turn with no ending — and the boot's continuation record.
+     */
+    async function cutOffAt(
+      ctx: ReturnType<typeof setup>,
+      run: { readonly id: string },
+      callId: string,
+      leadCutOff: boolean,
+      cause: InterruptCause,
+    ) {
       const cutSeq = ctx.itemDao.items.find(
-        (i) => i.runId === run.id && i.kind === 'call_started',
+        (i) =>
+          i.runId === run.id &&
+          i.kind === 'call_started' &&
+          i.payload.includes(`"callId":"${callId}"`),
       )!.seq;
       ctx.itemDao.items = ctx.itemDao.items.filter((i) => {
         if (i.runId !== run.id || i.seq <= cutSeq) {
@@ -18683,15 +18714,93 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         });
       }
       ctx.runDao.runs.get(run.id)!.status = 'running';
-      if (runCallee === undefined) {
-        ctx.callContextDao.sessions.set('call-1', ['sess-callee']);
-      }
       await ctx.service.reconcileOrphanedRuns(cause);
       const record = readRestartContinuation(
         ctx.runDao.runs.get(run.id)!.restartContinuation,
       );
       return { ...ctx, run, record: record! };
     }
+
+    /** A second call on call-1's thread, cut off by a quit while its callee worked. */
+    async function cutOffOnThread() {
+      const ctx = setup();
+      const run = await ctx.service.startRun({
+        slug: 'bg',
+        team: CALL_TEAM,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const first = ctx.callBroker.callAgent(run.id, 'a', {
+        title: 'ready',
+        agent: 'callee',
+        message: 'Reply READY',
+      });
+      await drain();
+      ctx.claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-callee' });
+      completeTurn(ctx.claude.starts[1]!, 'READY');
+      await first;
+      await ctx.callBroker.callAgent(run.id, 'a', {
+        title: 'zebra',
+        agent: 'callee',
+        message: 'New task: reply ZEBRA-1',
+        thread: 'call-1',
+        mode: 'async',
+      });
+      await drain();
+      expect(ctx.claude.starts[2]!.input.resumeSessionId).toBe('sess-callee');
+      completeTurn(ctx.claude.starts[2]!, 'half done');
+      completeTurn(ctx.claude.starts[0]!, 'waiting');
+      await drain();
+      while (ctx.registry.has(run.id)) {
+        completeTurn(ctx.claude.starts.at(-1)!, 'collected');
+        await drain();
+      }
+      return cutOffAt(ctx, run, 'call-2', false, 'quit');
+    }
+
+    it('resumes a cut-off call on a thread in its session with its brief given again when the session never saved it', async () => {
+      const ctx = await cutOffOnThread();
+      ctx.claude.briefLessSessions.add('sess-callee');
+      const before = ctx.claude.starts.length;
+
+      expect(
+        await ctx.service.continueAfterRestart(ctx.run.id, ctx.record),
+      ).toBe('continued');
+      await drain();
+
+      const callee = ctx.claude.starts
+        .slice(before)
+        .find((t) => t.input.prompt.includes('on this call'));
+      expect(ctx.claude.resumableAsked).toEqual([
+        {
+          sessionId: 'sess-callee',
+          configDir: null,
+          cwd: dir,
+          prompts: ['Reply READY', 'New task: reply ZEBRA-1'],
+        },
+      ]);
+      expect(callee!.input.resumeSessionId).toBe('sess-callee');
+      expect(callee!.input.prompt).not.toContain('Your session is intact');
+      expect(callee!.input.prompt).toMatch(
+        /\n\nThis call's brief:\nNew task: reply ZEBRA-1$/,
+      );
+    });
+
+    it('resumes a cut-off call on a thread as before when its session saved the brief', async () => {
+      const ctx = await cutOffOnThread();
+      const before = ctx.claude.starts.length;
+
+      await ctx.service.continueAfterRestart(ctx.run.id, ctx.record);
+      await drain();
+
+      const callee = ctx.claude.starts
+        .slice(before)
+        .find((t) => t.input.prompt.includes('on this call'));
+      expect(callee!.input.resumeSessionId).toBe('sess-callee');
+      expect(callee!.input.prompt).toContain('Your session is intact');
+      expect(callee!.input.prompt).not.toContain("This call's brief");
+    });
 
     it('continues a run a quit cut off: the call under its own id in its session, and the lead told it was a quit', async () => {
       const ctx = await cutOffByUpdate(true, 'quit');
@@ -18735,7 +18844,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         .slice(before)
         .find((t) => t.input.prompt.includes('on this call'));
       expect(ctx.claude.resumableAsked).toEqual([
-        { sessionId: 'sess-callee', configDir: null, cwd: dir },
+        { sessionId: 'sess-callee', configDir: null, cwd: dir, prompts: [] },
       ]);
       expect(callee!.input.resumeSessionId ?? null).toBeNull();
       expect(callee!.input.prompt).not.toContain('Your session is intact');
@@ -18791,7 +18900,12 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         .slice(before)
         .find((t) => t.input.prompt.includes('on this call'));
       expect(ctx.claude.resumableAsked).toEqual([
-        { sessionId: 'sess-member-2', configDir: profile, cwd: dir },
+        {
+          sessionId: 'sess-member-2',
+          configDir: profile,
+          cwd: dir,
+          prompts: [],
+        },
       ]);
       expect(callee!.input.configDir).toBe(profile);
       expect(callee!.input.resumeSessionId).toBe('sess-member-2');

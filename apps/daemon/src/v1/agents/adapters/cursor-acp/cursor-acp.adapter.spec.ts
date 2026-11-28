@@ -56,6 +56,7 @@ import {
   type AgentTurnHandle,
   type AgentTurnInput,
   NO_PLAN_LIMITS,
+  type SessionResumability,
 } from '../adapter.types';
 import { ClaudeAdapter } from '../claude/claude.adapter';
 import { CursorAcpAdapter, cursorAutoDecision } from './cursor-acp.adapter';
@@ -2285,18 +2286,38 @@ describe('CursorAcpAdapter.sessionResumable', () => {
     }
   });
 
-  function resumable(prepare: (store: string) => void): Promise<boolean> {
+  function resumable(
+    prepare: (store: string) => void,
+    prompts: readonly string[] = [],
+  ): Promise<SessionResumability> {
     const store = mkdtempSync(join(tmpdir(), 'cursor-resumable-store-'));
     stores.push(store);
     prepare(store);
     return new CursorAcpAdapter({
       vocabularyStore: freshVocabularyStore(),
       sessionStoreDir: store,
-    }).sessionResumable({ sessionId: 's', configDir: null, cwd: '/proj' });
+    }).sessionResumable({
+      sessionId: 's',
+      configDir: null,
+      cwd: '/proj',
+      prompts,
+    });
   }
 
   it('resumes a session whose store saved its prompt', async () => {
-    await expect(resumable(saveConversation)).resolves.toBe(true);
+    await expect(resumable(saveConversation)).resolves.toBe('resumable');
+  });
+
+  it('finds the asked prompt inside the saved user query', async () => {
+    await expect(resumable(saveConversation, ['ship it'])).resolves.toBe(
+      'resumable',
+    );
+  });
+
+  it('reads a store holding earlier prompts but not the asked one as missing it', async () => {
+    await expect(
+      resumable(saveConversation, ['ship it', 'New task: reply ZEBRA-1']),
+    ).resolves.toBe('prompt-missing');
   });
 
   it('does not resume a session with no checkpoint yet', async () => {
@@ -2311,7 +2332,7 @@ describe('CursorAcpAdapter.sessionResumable', () => {
         );
         db.close();
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe('unsaved');
   });
 
   it('does not resume a session whose saved messages hold no user message', async () => {
@@ -2322,11 +2343,11 @@ describe('CursorAcpAdapter.sessionResumable', () => {
           content: [{ type: 'text', text: 'on it' }],
         }),
       ),
-    ).resolves.toBe(false);
+    ).resolves.toBe('unsaved');
   });
 
   it('does not resume a session the CLI never wrote', async () => {
-    await expect(resumable(() => {})).resolves.toBe(false);
+    await expect(resumable(() => {})).resolves.toBe('unsaved');
   });
 
   it('resumes as before when the store cannot be read', async () => {
@@ -2335,7 +2356,7 @@ describe('CursorAcpAdapter.sessionResumable', () => {
         mkdirSync(join(store, 's'));
         writeFileSync(join(store, 's', 'store.db'), 'not a sqlite database');
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe('resumable');
   });
 });
 

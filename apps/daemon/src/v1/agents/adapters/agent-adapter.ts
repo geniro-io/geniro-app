@@ -107,6 +107,7 @@ import type {
   RecoveredSubagentOutcome,
   SessionPullRequest,
   SessionPullRequestsInput,
+  SessionResumability,
   SessionResumableInput,
   SubagentRecoveryRef,
   ToolCallMetric,
@@ -645,16 +646,20 @@ export abstract class AgentAdapter {
 
   /**
    * Whether `--resume` (or its protocol twin) can reach this conversation
-   * with its prompt in it — false only when the CLI's own store shows it was
+   * with its prompt in it — `unsaved` when the CLI's own store shows it was
    * never written or saved no prompt, as for a session whose process died
-   * before or just after the CLI read its first prompt.
+   * before or just after the CLI read its first prompt; `prompt-missing`
+   * when it saved earlier prompts but not the last of `input.prompts`, as
+   * for a call on a thread cut off before the CLI saved its new brief.
    *
-   * The default is yes, which is what every caller did before asking: a CLI
-   * that has not measured where it keeps sessions is resumed as it always was.
-   * Must NEVER throw.
+   * The default is `resumable`, which is what every caller did before
+   * asking: a CLI that has not measured where it keeps sessions is resumed as
+   * it always was. Must NEVER throw.
    */
-  sessionResumable(_input: SessionResumableInput): Promise<boolean> {
-    return Promise.resolve(true);
+  sessionResumable(
+    _input: SessionResumableInput,
+  ): Promise<SessionResumability> {
+    return Promise.resolve('resumable');
   }
 
   /**

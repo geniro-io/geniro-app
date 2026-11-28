@@ -78,6 +78,7 @@ import type {
   DeleteSessionTranscriptResult,
   NO_PLAN_LIMITS,
   RecoveredSubagentOutcome,
+  SessionResumability,
   SessionResumableInput,
   SubagentRecoveryRef,
   ToolCallMetric,
@@ -93,6 +94,7 @@ import {
   mcpServersVersion,
   readMcpServersKey,
 } from '../utils/mcp-config.utils';
+import { sessionResumabilityOf } from '../utils/session-prompt.utils';
 import { matchSessions } from '../utils/session-search.utils';
 import { readConfigForRewrite } from '../utils/strict-json.utils';
 import {
@@ -2828,14 +2830,22 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * The store holds a saved user message. Measured on 2026.11.22: a session
-   * killed before its first prompt or a second after it has no `store.db`, and
-   * one killed before its first checkpoint (3 s in) loads with no prompt in
-   * it. A store that cannot be read keeps the base's yes.
+   * The store's saved user messages, against the asked prompt. Measured on
+   * 2026.11.22: a session killed before its first prompt or a second after it
+   * has no `store.db`, and one killed before its first checkpoint (3 s in)
+   * loads with no prompt in it; a prompt is saved only at a checkpoint, so one
+   * cut off sooner is missing from a store holding earlier ones. A store that
+   * cannot be read keeps the base's `resumable`.
    */
-  override sessionResumable(input: SessionResumableInput): Promise<boolean> {
+  override sessionResumable(
+    input: SessionResumableInput,
+  ): Promise<SessionResumability> {
     const reading = this.readSessionConversation(input.sessionId, 0);
-    return Promise.resolve(reading === null || reading.userTexts.length > 0);
+    return Promise.resolve(
+      reading === null
+        ? 'resumable'
+        : sessionResumabilityOf(reading.userTexts, input.prompts),
+    );
   }
 
   /**

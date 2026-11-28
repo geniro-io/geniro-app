@@ -44,6 +44,26 @@ describe('callClocksFrom', () => {
     });
   });
 
+  it('runs on through work its callee does by itself inside the call, as one stretch', () => {
+    const rows = [
+      status('call-1', 'running', 0),
+      row('turn_complete', 10_000, { callId: 'call-1', usage: null }),
+      row('status', 40_000, {
+        nodeId: 'engineer',
+        status: 'running',
+        callId: 'call-1',
+        offTurn: true,
+      }),
+      row('turn_complete', 55_000, { callId: 'call-1', usage: null }),
+      status('call-1', 'completed', 90_000),
+    ];
+
+    expect(callClocksFrom(rows).get('call-1')).toMatchObject({
+      closedMs: 90_000,
+      runningSince: null,
+    });
+  });
+
   it('closes a stretch at its ending status and counts the whole of it', () => {
     const start = status('call-1', 'running', 0);
     const end = status('call-1', 'completed', 90_000);

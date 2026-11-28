@@ -64,6 +64,34 @@ describe('activeSpansFrom', () => {
     expect(spans).toEqual([{ startMs: T0, endMs: T0 + 100_000 }]);
   });
 
+  it('measures work a callee does by itself inside its open call, from its off-turn row to the turn ending written for it', () => {
+    const inCall = (s: number, value: string, extra = {}): SpanRow =>
+      row('status', 'engineer', s, {
+        nodeId: 'engineer',
+        status: value,
+        callId: 'call-1',
+        ...extra,
+      });
+    const ended = (s: number): SpanRow =>
+      row('turn_complete', 'engineer', s, { usage: null, callId: 'call-1' });
+
+    const spans = activeSpansFrom([
+      inCall(0, 'running'),
+      ended(10),
+      inCall(40, 'running', { offTurn: true }),
+      ended(55),
+      inCall(80, 'running'),
+      ended(90),
+      inCall(91, 'completed'),
+    ]);
+
+    expect(spans).toEqual([
+      { startMs: T0, endMs: T0 + 10_000 },
+      { startMs: T0 + 40_000, endMs: T0 + 55_000 },
+      { startMs: T0 + 80_000, endMs: T0 + 90_000 },
+    ]);
+  });
+
   it('measures a turn with no CLI timing from its member’s running row', () => {
     // cursor reports no duration over ACP; without the fallback its stretch
     // would be missing from the clock altogether.

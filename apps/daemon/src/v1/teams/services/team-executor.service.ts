@@ -1412,7 +1412,12 @@ export class TeamExecutorService
    */
   private readonly offTurnNodes = new Map<
     string,
-    { memberId: string; callId: string | null; restoreTo: NodeOutcome }
+    {
+      memberId: string;
+      callId: string | null;
+      /** Null for a stretch inside a call still open: the member stays running. */
+      restoreTo: NodeOutcome | null;
+    }
   >();
 
   /**
@@ -6330,7 +6335,7 @@ export class TeamExecutorService
       pool: {
         /** The settings holding the member's own conversation. */
         stamp: TeamMember;
-        /** False for a later attempt: the call's first one already said so. */
+        /** False for a launch the pool retries on its next member: the first launch already said so. */
         announce: boolean;
       } = { stamp: node, announce: true },
     ): void => {
@@ -6349,8 +6354,9 @@ export class TeamExecutorService
           },
           em,
         );
-        // One `running` row per CALL, balanced by its one ending: an attempt
-        // the pool hands on writes no ending, so a later one writes no start.
+        // A wake and a pool hand-on start turns of their own and say so too:
+        // every reader takes a second `running` on an open stretch as that
+        // same stretch.
         if (pool.announce) {
           await persistItem(node.id, 'status', null, {
             nodeId: node.id,
@@ -6392,6 +6398,25 @@ export class TeamExecutorService
       if (this.offTurnNodes.has(sessionKey)) {
         return;
       }
+      // Inside a call still open the member is `running` already, and the
+      // call's own ending is still owed: only the stretch is said.
+      if (
+        callId !== null &&
+        this.callBroker.callOpenBetweenTurns(runId, callId)
+      ) {
+        this.offTurnNodes.set(sessionKey, {
+          memberId,
+          callId,
+          restoreTo: null,
+        });
+        await persistItem(memberId, 'status', null, {
+          nodeId: memberId,
+          status: 'running',
+          callId,
+          offTurn: true,
+        });
+        return;
+      }
       const status = (await this.nodeStateDao.getByRunNode(runId, memberId, em))
         ?.status;
       // Only a member whose turn has ENDED has a badge to take — see
@@ -6431,12 +6456,29 @@ export class TeamExecutorService
      */
     const restoreOffTurnNodeBadge = async (
       sessionKey: string,
+      /** The stretch's own `turn_complete` was just written. */
+      endedByRow = false,
     ): Promise<void> => {
       const held = this.offTurnNodes.get(sessionKey);
       if (held === undefined) {
         return;
       }
       this.offTurnNodes.delete(sessionKey);
+      if (held.restoreTo === null) {
+        // A stretch with no `turn_complete` of its own (ACP late work, an
+        // error, the process closing, a wake starting) still ends as a turn
+        // does, so every clock closes it and `wall_turns` measures it; the
+        // call stays open.
+        if (!endedByRow) {
+          await persistItem(held.memberId, 'turn_complete', null, {
+            usage: null,
+            nodeId: held.memberId,
+            callId: held.callId,
+          });
+          await catchUpWallWork(held.memberId);
+        }
+        return;
+      }
       await this.nodeStateDao.setStatus(
         runId,
         held.memberId,
@@ -8254,7 +8296,10 @@ export class TeamExecutorService
           // goes back to whatever this stretch took it from.
           if (settles && ownsLivePlane) {
             offTurnBadgeAskedAt = 0;
-            await restoreOffTurnNodeBadge(sessionKey);
+            await restoreOffTurnNodeBadge(
+              sessionKey,
+              mapped.kind === 'turn_complete',
+            );
           }
         });
       };
@@ -9503,8 +9548,6 @@ export class TeamExecutorService
       const runAttempt = async (
         callee: TeamMember,
         member: number | undefined,
-        /** Whether this is the call's first attempt. */
-        first: boolean,
         prompt: string,
         resumeSessionId: string | null,
         /** Null for the last attempt, which nothing can hand on. */
@@ -9560,7 +9603,7 @@ export class TeamExecutorService
                         teamMember,
                         nodePoolMembers.get(callee.id) ?? 1,
                       )!,
-                  announce: first,
+                  announce: true,
                 }
               : undefined,
           );
@@ -9892,7 +9935,7 @@ export class TeamExecutorService
           first: CalleeTurnOutcome,
           firstHold: Promise<CallHoldRelease> | null,
           asReported: (outcome: CalleeTurnOutcome) => CalleeTurnOutcome,
-          handsOn: Parameters<typeof runAttempt>[5],
+          handsOn: Parameters<typeof runAttempt>[4],
         ): Promise<{ outcome: CalleeTurnOutcome; handedOn: boolean }> => {
           let reported = first;
           let pending = firstHold;
@@ -9967,7 +10010,6 @@ export class TeamExecutorService
             const woken = await runAttempt(
               node,
               member,
-              false,
               // What was sent between the wake and its turn's start — the
               // caller's queued messages first, as a held wake orders them —
               // and the note that the reply is the result, said last.
@@ -10106,7 +10148,7 @@ export class TeamExecutorService
                     member: attempt.member,
                     ...(skipped.length > 0 ? { poolSkipped: skipped } : {}),
                   };
-            const handsOn: Parameters<typeof runAttempt>[5] = isLast
+            const handsOn: Parameters<typeof runAttempt>[4] = isLast
               ? null
               : (result, madeToolCalls) => {
                   const handing =
@@ -10122,7 +10164,6 @@ export class TeamExecutorService
             const attempted = await runAttempt(
               attempt.node,
               member,
-              index === 0,
               attemptPrompt,
               attemptSession,
               handsOn,

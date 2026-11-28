@@ -26,6 +26,16 @@ describe('openNodeTurns', () => {
     ]);
   });
 
+  it('reads a second running row on an open call as that same turn, so one ending settles it', () => {
+    const turns = openNodeTurns([
+      row('status', 'b', { nodeId: 'b', status: 'running', callId: 'c1' }),
+      row('status', 'b', { nodeId: 'b', status: 'running', callId: 'c1' }),
+      row('status', 'b', { nodeId: 'b', status: 'completed', callId: 'c1' }),
+    ]);
+
+    expect(turns).toEqual([]);
+  });
+
   it('never lets a start-less terminal row settle a later turn', () => {
     const turns = openNodeTurns([
       row('status', 'a', { nodeId: 'a', status: 'skipped' }),

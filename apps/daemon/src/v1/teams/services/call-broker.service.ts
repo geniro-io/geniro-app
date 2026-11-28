@@ -5020,6 +5020,15 @@ export class CallBroker implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
+   * Whether `callId` is still open with its callee's turn over — held, or
+   * about to be — so what the callee's process does by itself now is work
+   * inside the call.
+   */
+  callOpenBetweenTurns(runId: string, callId: string): boolean {
+    return this.runs.get(runId)?.activeCalls.get(callId)?.turnEnded === true;
+  }
+
+  /**
    * The call's turn ended in a failure its callee's POOL gets past, and the
    * call now runs again on the next member. What the failed attempt left open
    * is not the new one's — an unanswered tool call would keep the silence

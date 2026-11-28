@@ -714,6 +714,44 @@ describe('scanTurns over a TEAM run', () => {
     expect(openTurnWorkedMs(open, at('2026-08-14T10:05:30.000Z'))).toBe(30_000);
   });
 
+  it('closes a callee’s stretch inside its open call on the turn ending written for it', () => {
+    const inCall = { callId: 'call-1' };
+    const { open, durations } = scanTurns(
+      [
+        item('status', '2026-08-14T10:00:00.000Z', {
+          memberId: 'engineer',
+          payload: { nodeId: 'engineer', status: 'running', ...inCall },
+        }),
+        nodeDone('engineer', '2026-08-14T10:01:00.000Z', 60_000),
+        item('status', '2026-08-14T10:05:00.000Z', {
+          memberId: 'engineer',
+          payload: {
+            nodeId: 'engineer',
+            status: 'running',
+            offTurn: true,
+            ...inCall,
+          },
+        }),
+        item('tool_call', '2026-08-14T10:05:01.000Z', {
+          memberId: 'engineer',
+          role: 'assistant',
+          payload: { id: 'toolu_1', name: 'Bash' },
+        }),
+        item('turn_complete', '2026-08-14T10:05:30.000Z', {
+          memberId: 'engineer',
+          payload: { usage: null, ...inCall },
+        }),
+      ],
+      { nodeScoped: true },
+    );
+
+    expect(open).toEqual([]);
+    expect([...durations.values()].at(-1)).toEqual({
+      ms: 30_000,
+      source: 'wall',
+    });
+  });
+
   it('leaves a CHAT run measured exactly as before', () => {
     // The default mode is the 1:1 one, and it must not have moved: a chat has
     // no `status` rows at all, and its turn still begins with the user.

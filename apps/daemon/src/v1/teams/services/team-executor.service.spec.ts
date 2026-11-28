@@ -10914,6 +10914,208 @@ describe('TeamExecutorService — agent calls', () => {
       await drain();
     });
 
+    it.each([
+      ['an unpooled', false],
+      ['a pooled', true],
+    ])(
+      'opens %s callee’s woken turn with a running row of its own, so the team clock measures it',
+      async (_label, pooled) => {
+        const { claude, eng, res, itemDao } = await engineerDelegating(pooled);
+        const engineerRunning = (): number =>
+          itemDao.items.filter((item) => {
+            const payload = JSON.parse(item.payload) as Record<string, unknown>;
+            return (
+              item.kind === 'status' &&
+              item.memberId === 'eng' &&
+              payload.status === 'running' &&
+              payload.callId === 'call-1'
+            );
+          }).length;
+        expect(engineerRunning()).toBe(1);
+        completeTurn(eng, 'research dispatched');
+        await drain();
+
+        completeTurn(res, 'RESEARCH RESULT');
+        await drain();
+
+        expect(claude.starts[3]!.input.resumeSessionId).toBe('s-eng');
+        expect(engineerRunning()).toBe(2);
+        completeTurn(claude.starts[3]!, 'REPORT WITH RESEARCH');
+        await drain();
+        completeTurn(claude.starts[0]!, 'done');
+        await drain();
+      },
+    );
+
+    it('starts a pooled callee’s hand-on turn with a running row of its own, after the failed turn ended', async () => {
+      const { claude, cursor, eng, res, itemDao } =
+        await engineerDelegating(true);
+      const engineerRunning = (): number =>
+        itemDao.items.filter((item) => {
+          const payload = JSON.parse(item.payload) as Record<string, unknown>;
+          return (
+            item.kind === 'status' &&
+            item.memberId === 'eng' &&
+            payload.status === 'running' &&
+            payload.callId === 'call-1'
+          );
+        }).length;
+      completeTurn(eng, 'Research is still running.');
+      await drain();
+      completeTurn(res, 'Use the red theme.');
+      await drain();
+      const resumed = claude.starts[3]!;
+      resumed.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      resumed.finish();
+      await drain();
+
+      expect(cursor.starts).toHaveLength(1);
+      expect(engineerRunning()).toBe(3);
+      completeTurn(cursor.starts[0]!, 'Built it.');
+      await drain();
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    describe('work a held callee’s process does by itself', () => {
+      const engineerRows = (
+        itemDao: Awaited<ReturnType<typeof engineerDelegating>>['itemDao'],
+      ): string[] =>
+        itemDao.items
+          .filter(
+            (item) =>
+              item.memberId === 'eng' &&
+              (item.kind === 'status' || item.kind === 'turn_complete'),
+          )
+          .map((item) => {
+            const payload = JSON.parse(item.payload) as Record<string, unknown>;
+            return item.kind === 'status'
+              ? `${String(payload.status)}${payload.offTurn === true ? ' off-turn' : ''} ${String(payload.callId)}`
+              : `turn_complete ${String(payload.callId)}`;
+          });
+
+      it('says the stretch with a running row of its own, keeps the call open, and ends it on the CLI’s own row', async () => {
+        const { claude, eng, res, itemDao, nodeDao, run } =
+          await engineerDelegating();
+        completeTurn(eng, 'research dispatched');
+        await drain();
+
+        eng.emitOffTurn({ type: 'text', text: 'the build finished' });
+        eng.emitOffTurn({ type: 'text', text: 'and the tests too' });
+        await drain();
+
+        expect(engineerRows(itemDao)).toEqual([
+          'running call-1',
+          'turn_complete call-1',
+          'running off-turn call-1',
+        ]);
+        expect(nodeDao.row(run.id, 'eng')?.status).toBe('running');
+
+        eng.emitOffTurn({
+          type: 'turn_complete',
+          usage: null,
+          stopReason: 'end_turn',
+          finalText: 'all green',
+        });
+        await drain();
+        expect(engineerRows(itemDao)).toEqual([
+          'running call-1',
+          'turn_complete call-1',
+          'running off-turn call-1',
+          'turn_complete call-1',
+        ]);
+        expect(nodeDao.row(run.id, 'eng')?.status).toBe('running');
+
+        completeTurn(res, 'RESEARCH RESULT');
+        await drain();
+        completeTurn(claude.starts[3]!, 'REPORT WITH RESEARCH');
+        await drain();
+        expect(engineerRows(itemDao).slice(4)).toEqual([
+          'running call-1',
+          'turn_complete call-1',
+          'completed call-1',
+        ]);
+        completeTurn(claude.starts[0]!, 'done');
+        await drain();
+      });
+
+      it('ends a stretch that has no terminal row of its own on a turn ending it writes, the call still open', async () => {
+        const { claude, eng, res, itemDao, nodeDao, run } =
+          await engineerDelegating();
+        completeTurn(eng, 'research dispatched');
+        await drain();
+        eng.emitOffTurn({ type: 'text', text: 'checking one more thing' });
+        await drain();
+
+        eng.emitOffTurn({ type: 'late_work_ended' });
+        await drain();
+
+        expect(engineerRows(itemDao)).toEqual([
+          'running call-1',
+          'turn_complete call-1',
+          'running off-turn call-1',
+          'turn_complete call-1',
+        ]);
+        expect(nodeDao.row(run.id, 'eng')?.status).toBe('running');
+        completeTurn(res, 'RESEARCH RESULT');
+        await drain();
+        completeTurn(claude.starts[3]!, 'REPORT WITH RESEARCH');
+        await drain();
+        completeTurn(claude.starts[0]!, 'done');
+        await drain();
+      });
+
+      it('closes a stretch that ends in an error on a turn ending it writes too, so the hold after it is not counted', async () => {
+        const { claude, eng, res, itemDao } = await engineerDelegating();
+        completeTurn(eng, 'research dispatched');
+        await drain();
+        eng.emitOffTurn({ type: 'text', text: 'one more look' });
+        await drain();
+
+        eng.emitOffTurn({ type: 'error', message: 'stream broke' });
+        await drain();
+
+        expect(engineerRows(itemDao)).toEqual([
+          'running call-1',
+          'turn_complete call-1',
+          'running off-turn call-1',
+          'turn_complete call-1',
+        ]);
+        completeTurn(res, 'RESEARCH RESULT');
+        await drain();
+        completeTurn(claude.starts[3]!, 'REPORT WITH RESEARCH');
+        await drain();
+        completeTurn(claude.starts[0]!, 'done');
+        await drain();
+      });
+
+      it('ends a stretch still open when a wake starts the call’s next turn', async () => {
+        const { claude, eng, res, itemDao } = await engineerDelegating();
+        completeTurn(eng, 'research dispatched');
+        await drain();
+        eng.emitOffTurn({ type: 'text', text: 'still looking' });
+        await drain();
+
+        completeTurn(res, 'RESEARCH RESULT');
+        await drain();
+
+        expect(engineerRows(itemDao)).toEqual([
+          'running call-1',
+          'turn_complete call-1',
+          'running off-turn call-1',
+          'turn_complete call-1',
+          'running call-1',
+        ]);
+        completeTurn(claude.starts[3]!, 'REPORT WITH RESEARCH');
+        await drain();
+        completeTurn(claude.starts[0]!, 'done');
+        await drain();
+      });
+    });
+
     it('tells the last callee in a chain where its answer goes, as its own part ahead of the “May call” block', async () => {
       const { res } = await engineerDelegating();
 
@@ -13291,8 +13493,8 @@ describe('TeamExecutorService — agent calls', () => {
         .map((payload) => payload.status)
         .filter((status) => status !== 'running');
       expect(endings).toEqual(['completed']);
-      // …and ONE start: the renderer balances a call's `running` rows against
-      // its endings, so a second start would leave the callee working forever.
+      // …and a start for each member's turn: member 2's hand-on is a turn of
+      // its own, which every reader keys onto the call's one open stretch.
       const starts = rows
         .filter((row) => row.kind === 'status')
         .map((row) => JSON.parse(row.payload) as Record<string, unknown>)
@@ -13300,7 +13502,7 @@ describe('TeamExecutorService — agent calls', () => {
           (payload) =>
             payload.callId !== undefined && payload.status === 'running',
         );
-      expect(starts).toHaveLength(1);
+      expect(starts).toHaveLength(2);
 
       completeTurn(claude.starts[0]!, 'done');
       await drain();
@@ -13403,7 +13605,7 @@ describe('TeamExecutorService — agent calls', () => {
           .map((row) => JSON.parse(row.payload) as Record<string, unknown>)
           .filter((payload) => payload.callId === 'call-3')
           .map((payload) => payload.status),
-      ).toEqual(['running', 'completed']);
+      ).toEqual(['running', 'running', 'completed']);
       expect(rows.some((row) => row.payload.includes('"resetWake"'))).toBe(
         false,
       );

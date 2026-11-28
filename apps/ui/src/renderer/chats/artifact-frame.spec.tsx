@@ -14,6 +14,7 @@ import {
   ANSWERS_SAVE_DELAY_MS,
   ArtifactFrame,
   MAX_ANSWER_NAME,
+  MAX_INLINE_HEIGHT,
 } from './artifact-frame';
 import {
   BrowserPaneContext,
@@ -76,6 +77,67 @@ async function render(
 }
 
 const frame = (): HTMLIFrameElement | null => container.querySelector('iframe');
+
+async function reportHeight(height: number): Promise<void> {
+  const target = frame();
+  await act(async () => {
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { source: 'geniro-artifact', type: 'height', height },
+        source: target!.contentWindow,
+      }),
+    );
+  });
+}
+
+describe('ArtifactFrame — clipped, for a touch screen', () => {
+  async function renderClipped(): Promise<void> {
+    await act(async () => {
+      root.render(
+        <ArtifactUrlContext.Provider value={() => URL}>
+          <ArtifactFrame
+            artifact={ARTIFACT}
+            clipped
+            clippedAction={<button type="button">Open full screen</button>}
+          />
+        </ArtifactUrlContext.Provider>,
+      );
+    });
+  }
+  const clip = (): HTMLElement | null =>
+    container.querySelector('[data-slot="artifact-frame-clip"]');
+  const action = (): HTMLButtonElement | undefined =>
+    [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Open full screen',
+    );
+
+  it('gives the page no scroll of its own, so a swipe over it scrolls the chat', async () => {
+    await renderClipped();
+    expect(frame()?.getAttribute('scrolling')).toBe('no');
+  });
+
+  it('keeps a long page at the inline height, so the page lays out as it does unclipped, and fades it out with the action', async () => {
+    await renderClipped();
+    await reportHeight(2400);
+
+    // A frame grown to the page would feed the page's own viewport height: a
+    // hero of `100vh` grew with it and pushed what it centres out of view.
+    expect(frame()?.style.height).toBe(`${MAX_INLINE_HEIGHT}px`);
+    expect(frame()?.className).toContain('mask-b-from-70%');
+    expect(clip()?.getAttribute('data-cut-off')).toBe('true');
+    expect(action()).toBeDefined();
+  });
+
+  it('shows a short page whole, with no fade and no action', async () => {
+    await renderClipped();
+    await reportHeight(300);
+
+    expect(frame()?.style.height).toBe('300px');
+    expect(frame()?.className).not.toContain('mask-b-from');
+    expect(clip()?.getAttribute('data-cut-off')).toBe('false');
+    expect(action()).toBeUndefined();
+  });
+});
 
 describe('ArtifactFrame', () => {
   it('frames the page the url builder names', async () => {
@@ -184,6 +246,12 @@ describe('ArtifactFrame', () => {
       );
     });
     expect(frame()?.style.height).toBe(before);
+  });
+
+  it('lets an unclipped page scroll inside its frame', async () => {
+    await render();
+    expect(frame()?.hasAttribute('scrolling')).toBe(false);
+    expect(frame()?.className).toContain('rounded-lg');
   });
 
   it('caps its own growth so one artifact cannot own the transcript', async () => {

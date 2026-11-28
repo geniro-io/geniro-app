@@ -128,7 +128,7 @@ const INITIAL_HEIGHT = 240;
  * How tall an INLINE frame may grow. The popup lets the page fill the dialog
  * instead, so one artifact can never take over the transcript.
  */
-const MAX_INLINE_HEIGHT = 520;
+export const MAX_INLINE_HEIGHT = 520;
 
 /**
  * One published artifact, rendered in a sandbox.
@@ -167,11 +167,23 @@ export function ArtifactFrame({
   artifact,
   className,
   fill = false,
+  clipped = false,
+  clippedAction = null,
 }: {
   artifact: PublishedArtifact;
   className?: string;
   /** Take the room the container gives, rather than sizing to the content. */
   fill?: boolean;
+  /**
+   * Show the top of the page without a scroll of its own: the inline frame, at
+   * the inline height so the page lays out exactly as it does unclipped, which
+   * the page cannot scroll, under a fade when the page is taller. For a touch
+   * screen, where a swipe that starts on a page which can scroll moves the page
+   * instead of the chat around it; taps still reach it.
+   */
+  clipped?: boolean;
+  /** Drawn over the fade of a clipped page taller than the inline height. */
+  clippedAction?: React.ReactNode;
 }): React.JSX.Element {
   const urlFor = useContext(ArtifactUrlContext);
   const answersStore = useContext(ArtifactAnswersContext);
@@ -438,26 +450,47 @@ export function ArtifactFrame({
     { id: 'save', text: saveFailure, clear: () => setSaveFailure(null) },
   ].filter((notice) => notice.text !== null);
 
+  const inlineClip = clipped && !fill;
+  const cutOff = inlineClip && height > MAX_INLINE_HEIGHT;
+
+  const iframe = (
+    <iframe
+      ref={frame}
+      // Keyed by the exact version so a republish loads the new page rather
+      // than leaving React to reuse the element with a stale document.
+      key={`${artifact.artifactId}:${artifact.version}`}
+      src={urlFor(artifact)}
+      title={artifact.title}
+      sandbox="allow-scripts"
+      referrerPolicy="no-referrer"
+      scrolling={inlineClip ? 'no' : undefined}
+      onLoad={postTheme}
+      className={cn(
+        'w-full rounded-lg border border-border bg-transparent',
+        cutOff && 'mask-b-from-70%',
+        className,
+      )}
+      style={fill ? undefined : { height: Math.min(height, MAX_INLINE_HEIGHT) }}
+    />
+  );
+
   return (
     <div className={cn(fill ? 'relative h-full' : 'contents')}>
-      <iframe
-        ref={frame}
-        // Keyed by the exact version so a republish loads the new page rather
-        // than leaving React to reuse the element with a stale document.
-        key={`${artifact.artifactId}:${artifact.version}`}
-        src={urlFor(artifact)}
-        title={artifact.title}
-        sandbox="allow-scripts"
-        referrerPolicy="no-referrer"
-        onLoad={postTheme}
-        className={cn(
-          'w-full rounded-lg border border-border bg-transparent',
-          className,
-        )}
-        style={
-          fill ? undefined : { height: Math.min(height, MAX_INLINE_HEIGHT) }
-        }
-      />
+      {inlineClip ? (
+        <div
+          data-slot="artifact-frame-clip"
+          data-cut-off={cutOff}
+          className="relative">
+          {iframe}
+          {cutOff && clippedAction !== null && (
+            <div className="absolute inset-x-0 bottom-3 flex justify-center">
+              {clippedAction}
+            </div>
+          )}
+        </div>
+      ) : (
+        iframe
+      )}
       {notices.length > 0 && (
         <div
           className={cn(

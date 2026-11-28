@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { afterPopstate } from '../__tests__/after-popstate';
+import { TOUCH_DEVICE_QUERY } from '../components/use-touch-device';
 import { ArtifactCard } from './artifact-block';
 import { ArtifactShareContext } from './artifact-share';
 import {
@@ -350,5 +351,67 @@ describe('ArtifactCard', () => {
     await afterPopstate(() => close!.click(), 'the ✕');
 
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+});
+
+describe('ArtifactCard — on a touch screen', () => {
+  function stubTouch(touch: boolean): void {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: touch && query === TOUCH_DEVICE_QUERY,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      })),
+    );
+  }
+  async function reportHeight(height: number): Promise<void> {
+    const target = inlineFrame();
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { source: 'geniro-artifact', type: 'height', height },
+          source: target!.contentWindow,
+        }),
+      );
+    });
+  }
+  const openFullScreen = (): HTMLButtonElement | undefined =>
+    [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Open full screen',
+    );
+
+  it('clips a long page under a fade with an Open full screen button that opens it', async () => {
+    stubTouch(true);
+    await render();
+    await reportHeight(2400);
+
+    expect(inlineFrame()?.style.height).toBe('520px');
+    expect(inlineFrame()?.getAttribute('scrolling')).toBe('no');
+    expect(
+      container
+        .querySelector('[data-slot="artifact-frame-clip"]')
+        ?.getAttribute('data-cut-off'),
+    ).toBe('true');
+    expect(document.querySelectorAll('iframe')).toHaveLength(1);
+
+    await act(async () => {
+      openFullScreen()!.click();
+    });
+
+    expect(document.querySelectorAll('iframe')).toHaveLength(2);
+  });
+
+  it('frames the page as before off a touch screen', async () => {
+    stubTouch(false);
+    await render();
+    await reportHeight(2400);
+
+    expect(inlineFrame()?.style.height).toBe('520px');
+    expect(inlineFrame()?.hasAttribute('scrolling')).toBe(false);
+    expect(
+      container.querySelector('[data-slot="artifact-frame-clip"]'),
+    ).toBeNull();
+    expect(openFullScreen()).toBeUndefined();
   });
 });

@@ -408,6 +408,24 @@ describe('ToolUsageGroup', () => {
     expect(text).not.toContain('Offered in sessions');
   });
 
+  it('gives a call shorter than a second its milliseconds', async () => {
+    const subject = row('memory_read', 3, {
+      source: 'geniro',
+      avgDurationMs: 249,
+    });
+    const api = statsApi(async () => listOf({ rows: [subject] }), {
+      row: subject,
+      byAgent: [],
+      byOrigin: [],
+      byProject: [],
+    });
+    await renderGroup(api);
+    await press(container.querySelector('[data-slot="tool-usage-row"]'));
+    const text =
+      document.querySelector('[data-slot="tool-card"]')?.textContent ?? '';
+    expect(text).toContain('Avg time249 ms');
+  });
+
   it('counts refused calls in the same Errors figure as the table and the split', async () => {
     const subject = row('memory_read', 2, {
       source: 'geniro',

@@ -104,6 +104,13 @@ function formatWhen(iso: string | null): string {
   return iso === null ? NOT_MEASURED : formatRelativeTime(iso);
 }
 
+function formatCallTime(ms: number | null): string {
+  if (ms === null) {
+    return NOT_MEASURED;
+  }
+  return ms < 1_000 ? `${formatCount(Math.round(ms))} ms` : formatDuration(ms);
+}
+
 function formatFirstSeen(iso: string | null): string {
   return iso === null ? NOT_MEASURED : formatShortDate(iso);
 }
@@ -617,11 +624,7 @@ function ToolCardDialog({
               {formatCount(row.offeredSessions)}
             </Figure>
           )}
-          <Figure label="Avg time">
-            {row.avgDurationMs === null
-              ? NOT_MEASURED
-              : formatDuration(row.avgDurationMs)}
-          </Figure>
+          <Figure label="Avg time">{formatCallTime(row.avgDurationMs)}</Figure>
           <Figure label="Avg result size">
             {row.avgResultChars === null
               ? NOT_MEASURED

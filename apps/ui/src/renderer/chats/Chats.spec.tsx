@@ -22830,6 +22830,7 @@ describe('Chats — one hosted conversation', () => {
         ],
       ]),
       doneDismissedThrough: new Map<string, number>(),
+      doneDismissedFinish: new Map<string, string | null>(),
       unresolved: 1,
       dismiss: vi.fn(),
       dismissDone: vi.fn(),
@@ -22908,6 +22909,7 @@ describe('Chats — one hosted conversation', () => {
     const managerNotices = {
       notices: new Map(),
       doneDismissedThrough: new Map([['thread-a', 1]]),
+      doneDismissedFinish: new Map<string, string | null>(),
       unresolved: 0,
       dismiss: vi.fn(),
       dismissDone,
@@ -22939,7 +22941,7 @@ describe('Chats — one hosted conversation', () => {
         .querySelector<HTMLButtonElement>('[data-slot="thread-event-dismiss"]')!
         .click();
     });
-    expect(dismissDone).toHaveBeenCalledWith('thread-b', 2);
+    expect(dismissDone).toHaveBeenCalledWith('thread-b', 2, null);
   });
 
   it('draws the working threads its surface names in the corner, and opens a pressed one through the surface', async () => {
@@ -22990,6 +22992,36 @@ describe('Chats — one hosted conversation', () => {
     expect(
       container.querySelector('[data-slot="working-threads-card"]'),
     ).toBeNull();
+  });
+
+  it('pins the manager’s finished threads with no question open, and only in the manager’s chat', async () => {
+    const { client } = makeClient();
+    const quiet = (): (() => void) => () => undefined;
+    for (const name of [
+      'onMemoryChanged',
+      'onLessonsChanged',
+      'onKnowledgeChanged',
+      'onSharesChanged',
+    ] as const) {
+      Object.assign(client, { [name]: client[name] ?? quiet });
+    }
+    const finishedThreads = [{ runId: 'r-otter', title: 'Otter' }];
+    const manager = await mount(client, undefined, {
+      hosted: hostedThread({ commandCenterManager: true, finishedThreads }),
+    });
+
+    const strip = manager.querySelector('[data-slot="pinned-request"]');
+    expect(
+      strip?.querySelector('[data-slot="pinned-request-toggle"]')?.textContent,
+    ).toBe('Waiting on you · 1 finished');
+    expect(
+      strip?.querySelector('[data-slot="pinned-finished-line"]')?.textContent,
+    ).toContain('Otter');
+
+    const other = await mount(makeClient().client, undefined, {
+      hosted: hostedThread({ finishedThreads }),
+    });
+    expect(other.querySelector('[data-slot="pinned-request"]')).toBeNull();
   });
 
   it('draws the one conversation the surface opens, with no list and no new-chat composer', async () => {

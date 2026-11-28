@@ -130,6 +130,15 @@ describe('CommandCenterEventsService', () => {
     );
   });
 
+  it('re-reads the card of a thread deleted anywhere, so every board drops it', () => {
+    agents.publishRunDeleted('thread-1');
+
+    expect(contacts.publishChanged).toHaveBeenCalledWith(
+      ['thread-1'],
+      'deleted',
+    );
+  });
+
   it('relays nothing for a message between two threads', async () => {
     agents.publishThreadMessageSent({
       messageId: 'm-3',

@@ -10,6 +10,7 @@ import {
 } from '../../../auth/remote-marker';
 import { NOTICE_ITEMS_MAX } from '../command-center.types';
 import {
+  DismissThreadDoneDto,
   SettingsNoticeReadingsDto,
   startThreadRunSchema,
 } from '../dto/command-center.dto';
@@ -113,6 +114,13 @@ describe('CommandCenterController', () => {
           readings: [{ kind: 'memory-conflicts', items: ['f1'] }],
         }).success,
       ).toBe(false);
+    });
+
+    it("takes a Done card's dismissal with its seq, or with none as the gallery sends it", () => {
+      const schema = DismissThreadDoneDto.schema;
+      expect(schema.safeParse({ seq: 4 }).success).toBe(true);
+      expect(schema.safeParse({}).success).toBe(true);
+      expect(schema.safeParse({ seq: 0 }).success).toBe(false);
     });
   });
 

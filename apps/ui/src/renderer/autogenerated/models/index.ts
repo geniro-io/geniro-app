@@ -3564,6 +3564,12 @@ export interface CommandCenterCard {
      * @memberof CommandCenterCard
      */
     contact: CommandCenterCardContact;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterCard
+     */
+    finishKey: string | null;
 }
 
 
@@ -5759,11 +5765,11 @@ export interface DigestThreadFailedToolsInner {
  */
 export interface DismissThreadDoneDto {
     /**
-     * The manager chat seq of the Done row whose card is dismissed
+     * The manager chat seq of the Done row whose card is dismissed; left out, every Done row of the thread written so far is
      * @type {number}
      * @memberof DismissThreadDoneDto
      */
-    seq: number;
+    seq?: number;
 }
 /**
  * 
@@ -21435,6 +21441,12 @@ export interface ThreadDoneDismissal {
      * @memberof ThreadDoneDismissal
      */
     throughSeq: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadDoneDismissal
+     */
+    finishKey: string | null;
 }
 /**
  * 

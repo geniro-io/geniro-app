@@ -1245,6 +1245,12 @@ describe('parseCommandCenterChanged — the command_center_changed twin', () => 
     ).toEqual({ runIds: ['a'], reason: 'refiled' });
   });
 
+  it('reads a deleted run, so its card leaves the board', () => {
+    expect(
+      parseCommandCenterChanged({ runIds: ['a'], reason: 'deleted' }),
+    ).toEqual({ runIds: ['a'], reason: 'deleted' });
+  });
+
   it('reads the manager runs of a thread start that moved', () => {
     expect(
       parseCommandCenterChanged({ runIds: ['manager'], reason: 'start' }),

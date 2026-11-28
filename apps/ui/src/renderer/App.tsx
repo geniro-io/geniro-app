@@ -647,6 +647,16 @@ export function App(): React.JSX.Element {
     setSettingsSectionOpen(true);
     setView('settings');
   }, []);
+  const openKnowledge = useLatestCallback((target: KnowledgeRequest): void => {
+    setKnowledgeRequest(target);
+    setView('knowledge');
+  }, []);
+  const openMemory = useLatestCallback((memoryHandle: string): void => {
+    setMemoryFocus(memoryHandle);
+    setSettingsSection('memory');
+    setSettingsSectionOpen(true);
+    setView('settings');
+  }, []);
   const openLessonsReview = useLatestCallback((): void => {
     setSettingsSection('memory');
     setSettingsSectionOpen(true);
@@ -965,16 +975,8 @@ export function App(): React.JSX.Element {
                         setSettingsSectionOpen(true);
                         setView('settings');
                       }}
-                      onOpenKnowledge={(target) => {
-                        setKnowledgeRequest(target);
-                        setView('knowledge');
-                      }}
-                      onOpenMemory={(memoryHandle) => {
-                        setMemoryFocus(memoryHandle);
-                        setSettingsSection('memory');
-                        setSettingsSectionOpen(true);
-                        setView('settings');
-                      }}
+                      onOpenKnowledge={openKnowledge}
+                      onOpenMemory={openMemory}
                       onOpenTeam={(slug) => {
                         setTeamRequest(slug);
                         setView('teams');
@@ -1097,6 +1099,8 @@ export function App(): React.JSX.Element {
                           setView('chats');
                         }}
                         onOpenMemoryConflicts={openMemoryConflicts}
+                        onOpenMemory={openMemory}
+                        onOpenKnowledge={openKnowledge}
                       />
                     </div>
                   ) : null}

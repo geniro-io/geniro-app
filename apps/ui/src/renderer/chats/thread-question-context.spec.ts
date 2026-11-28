@@ -571,4 +571,18 @@ describe('the listing of a thread run a reader keeps', () => {
     );
     expect(readRunArtifacts).toHaveBeenCalledTimes(3);
   });
+
+  it('reads the listing again for a finish it was not read for, once per finish', async () => {
+    const readRunArtifacts = vi.fn().mockResolvedValue({ artifacts: [] });
+    const reader = threadContextReaderOf(chatsWith(readRunArtifacts), HANDLE);
+
+    await reader.artifacts('thread-1');
+    await reader.artifacts('thread-1', [], 'finish-1');
+    await reader.artifacts('thread-1', [], 'finish-1');
+    await reader.artifacts('thread-1');
+    await reader.artifacts('thread-1', [], 'finish-2');
+    await reader.artifacts('thread-1', [], 'finish-1');
+
+    expect(readRunArtifacts).toHaveBeenCalledTimes(3);
+  });
 });

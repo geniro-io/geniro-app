@@ -561,7 +561,7 @@ describe('SettingsNoticeCard', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it('cuts the card label before its heading on a narrow line', async () => {
+  it('keeps the card label whole and lets its heading give way on a narrow line', async () => {
     findings = [finding('f1'), finding('f2')];
     await draw();
 
@@ -570,10 +570,13 @@ describe('SettingsNoticeCard', () => {
     const heading = card?.querySelector(
       '[data-slot="settings-attention-member"]',
     );
-    expect(label?.classList.contains('shrink-[9999]')).toBe(true);
+    expect(label?.parentElement?.classList.contains('flex-wrap')).toBe(true);
+    expect(label?.classList.contains('shrink-0')).toBe(false);
     expect(label?.classList.contains('truncate')).toBe(true);
     expect(label?.getAttribute('title')).toBe('Waiting for your decision');
-    expect(heading?.classList.contains('shrink-0')).toBe(false);
+    expect(heading?.classList.contains('truncate')).toBe(true);
+    expect(heading?.classList.contains('basis-24')).toBe(true);
+    expect(heading?.classList.contains('max-w-max')).toBe(true);
   });
 
   it('follows the conflicts on a memory change and keeps one card across a reconnect', async () => {

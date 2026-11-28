@@ -15,6 +15,7 @@ import {
   type ThreadDoneDismissals,
   ThreadDoneDismissalsContext,
   ThreadDoneNewestContext,
+  ThreadFinishKeysContext,
   ThreadReportsContext,
 } from './thread-done-context';
 import { ThreadEventCard, ThreadEventRow } from './thread-event-card';
@@ -561,7 +562,7 @@ describe("ThreadEventCard — a finished thread drawn as the graph's card", () =
   it('puts the time it finished and its actions in a foot, Archive worded with its icon', () => {
     const el = render(
       <ThreadDoneDismissalsContext.Provider
-        value={{ through: new Map(), dismiss: vi.fn() }}>
+        value={{ through: new Map(), finishes: new Map(), dismiss: vi.fn() }}>
         <ThreadArchiveContext.Provider value={() => vi.fn()}>
           <ThreadOpenContext.Provider value={vi.fn()}>
             <ThreadIdentityContext.Provider value={IDENTITIES}>
@@ -779,14 +780,17 @@ describe('ThreadEventCard — archive', () => {
       initial?: ReadonlyMap<string, number>;
       seq: number;
       newest: ReadonlyMap<string, number>;
-      onDismiss?: (runId: string, seq: number) => void;
+      onDismiss?: (runId: string, seq: number | null) => void;
     }): React.ReactElement {
       const [through, setThrough] = useState(initial);
       const dismissals: ThreadDoneDismissals = {
         through,
+        finishes: new Map(),
         dismiss: (runId, dismissedSeq) => {
           onDismiss(runId, dismissedSeq);
-          setThrough(new Map(through).set(runId, dismissedSeq));
+          if (dismissedSeq !== null) {
+            setThrough(new Map(through).set(runId, dismissedSeq));
+          }
         },
       };
       return (
@@ -798,8 +802,64 @@ describe('ThreadEventCard — archive', () => {
       );
     }
 
+    function finishDismissals(
+      finishes: ReadonlyMap<string, string | null>,
+      dismiss: ThreadDoneDismissals['dismiss'] = vi.fn(),
+    ): ThreadDoneDismissals {
+      return { through: new Map(), finishes, dismiss };
+    }
+
+    it("draws nothing for the newest row while the board names the finish dismissed from the gallery, and the card again for the thread's next finish", () => {
+      const row = (finishKey: string): HTMLElement =>
+        render(
+          <ThreadDoneDismissalsContext.Provider
+            value={finishDismissals(new Map([['r-otter', 'fk-1']]))}>
+            <ThreadFinishKeysContext.Provider
+              value={new Map([['r-otter', finishKey]])}>
+              <ThreadDoneNewestContext.Provider
+                value={new Map([['r-otter', 20]])}>
+                <ThreadEventRow
+                  row={DONE_ROW('r-otter', 'Finished')}
+                  seq={20}
+                />
+              </ThreadDoneNewestContext.Provider>
+            </ThreadFinishKeysContext.Provider>
+          </ThreadDoneDismissalsContext.Provider>,
+        );
+
+      expect(
+        row('fk-1').querySelector('[data-slot="thread-event-card"]'),
+      ).toBeNull();
+      expect(card(row('fk-2')).dataset.run).toBe('r-otter');
+    });
+
+    it('dismisses the finish itself from a card with no row, as the gallery draws it, once the board names the finish', () => {
+      const dismiss = vi.fn();
+      const withFinish = render(
+        <ThreadDoneDismissalsContext.Provider
+          value={finishDismissals(new Map(), dismiss)}>
+          <ThreadFinishKeysContext.Provider
+            value={new Map([['r-otter', 'fk-1']])}>
+            <ThreadEventCard kind="done" runId="r-otter" title="Otter" />
+          </ThreadFinishKeysContext.Provider>
+        </ThreadDoneDismissalsContext.Provider>,
+      );
+      press(withFinish, 'thread-event-dismiss');
+      expect(dismiss).toHaveBeenCalledWith('r-otter', null);
+
+      const unknown = render(
+        <ThreadDoneDismissalsContext.Provider
+          value={finishDismissals(new Map(), dismiss)}>
+          <ThreadEventCard kind="done" runId="r-otter" title="Otter" />
+        </ThreadDoneDismissalsContext.Provider>,
+      );
+      expect(
+        unknown.querySelector('[data-slot="thread-event-dismiss"]'),
+      ).toBeNull();
+    });
+
     it('removes the card on Dismiss, handing the daemon its thread and row, with no fold left behind', () => {
-      const dismissed: [string, number][] = [];
+      const dismissed: [string, number | null][] = [];
       const el = render(
         <Dismissable
           seq={9}

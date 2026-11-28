@@ -71,6 +71,12 @@ export const CommandCenterCardSchema = z
         .boolean()
         .describe('The manager waits on its reply to a message'),
     }),
+    finishKey: z
+      .string()
+      .nullable()
+      .describe(
+        'A short hash naming this finish of a done thread, which a dismissal of its finish records; null while it is not done',
+      ),
   })
   .meta({ id: 'CommandCenterCard' });
 export type CommandCenterCard = z.infer<typeof CommandCenterCardSchema>;
@@ -304,6 +310,12 @@ export const ThreadDoneDismissalSchema = z
       .describe(
         'The manager chat seq of the newest Done row dismissed; every Done row of the thread at or below it draws nothing',
       ),
+    finishKey: z
+      .string()
+      .nullable()
+      .describe(
+        "The board card's finishKey when the thread's finish was dismissed: while the card names the same one it stays dismissed; null when the thread was not on the board",
+      ),
   })
   .meta({ id: 'ThreadDoneDismissal' });
 export type ThreadDoneDismissal = z.infer<typeof ThreadDoneDismissalSchema>;
@@ -323,7 +335,10 @@ export const DismissThreadDoneSchema = z
       .number()
       .int()
       .min(1)
-      .describe('The manager chat seq of the Done row whose card is dismissed'),
+      .optional()
+      .describe(
+        'The manager chat seq of the Done row whose card is dismissed; left out, every Done row of the thread written so far is',
+      ),
   })
   .meta({ id: 'DismissThreadDone' });
 
@@ -367,7 +382,14 @@ export type RosterReason = z.infer<typeof RosterReasonSchema>;
 export interface CommandCenterChangedEvent {
   runIds: string[];
   reason:
-    'status' | 'items' | 'roster' | 'task' | 'refiled' | 'start' | 'notices';
+    | 'status'
+    | 'items'
+    | 'roster'
+    | 'task'
+    | 'refiled'
+    | 'start'
+    | 'notices'
+    | 'deleted';
 }
 
 /**

@@ -3,6 +3,7 @@ import { Subject } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
+import type { RunWire } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
@@ -16,6 +17,7 @@ import type { ShareEventBus } from '../../shares/services/share-events.bus';
 import { commandCenterDb } from '../__tests__/command-center-db';
 import { CommandCenterDoneDismissalDao } from '../dao/command-center-done-dismissal.dao';
 import { CommandCenterNoticeDao } from '../dao/command-center-notice.dao';
+import { finishKeyHash } from '../utils/finish-key';
 import type { CommandCenterService } from './command-center.service';
 import type { CommandCenterEventBus } from './command-center-events.bus';
 import { CommandCenterNoticesService } from './command-center-notices.service';
@@ -47,6 +49,7 @@ function shareRow(id: string, destinationId: string, status: string): ShareRow {
 describe('CommandCenterNoticesService', () => {
   let db: Db;
   let managerRunId: string | null;
+  let finished: Map<string, RunWire>;
   let shares: ShareRow[];
   let findingIds: string[];
   let shareChanges: Subject<unknown>;
@@ -62,6 +65,7 @@ describe('CommandCenterNoticesService', () => {
     db = await commandCenterDb();
     await db.seedRun(MANAGER);
     managerRunId = MANAGER;
+    finished = new Map();
     shares = [];
     findingIds = [];
     shareChanges = new Subject();
@@ -85,6 +89,18 @@ describe('CommandCenterNoticesService', () => {
         notices,
         {
           managerRunId: vi.fn(() => Promise.resolve(managerRunId)),
+          activeThreads: vi.fn((runIds: readonly string[]) =>
+            Promise.resolve({
+              managerRunId,
+              runs: runIds.flatMap((id) => {
+                const run = finished.get(id);
+                return run === undefined ? [] : [run];
+              }),
+            }),
+          ),
+          columnsOf: vi.fn((runs: readonly RunWire[]) =>
+            Promise.resolve(new Map(runs.map((run) => [run.id, 'done']))),
+          ),
         } as unknown as CommandCenterService,
         new CommandCenterNoticeDao(db.em),
         new CommandCenterDoneDismissalDao(db.em),
@@ -503,17 +519,30 @@ describe('CommandCenterNoticesService', () => {
       return Math.max(...rows.map((row) => row.seq));
     }
 
-    it('records a dismissed Done card for every device and announces it', async () => {
+    function finish(runId: string, attentionAt: string): RunWire {
+      const run = {
+        id: runId,
+        outcome: null,
+        goals: [],
+        attentionAt,
+      } as unknown as RunWire;
+      finished.set(runId, run);
+      return run;
+    }
+
+    it('records a dismissed Done card and the finish it showed for every device, and announces it', async () => {
       const seq = await doneRowSeq('thread-a', 'thread-b');
+      const run = finish('thread-b', '2026-11-28T10:00:00.000Z');
 
       const answer = await service.dismissDone('thread-b', seq);
 
-      expect(answer.doneDismissals).toEqual([
-        { runId: 'thread-b', throughSeq: seq },
-      ]);
-      expect((await make().list()).doneDismissals).toEqual([
-        { runId: 'thread-b', throughSeq: seq },
-      ]);
+      const recorded = {
+        runId: 'thread-b',
+        throughSeq: seq,
+        finishKey: finishKeyHash(run),
+      };
+      expect(answer.doneDismissals).toEqual([recorded]);
+      expect((await make().list()).doneDismissals).toEqual([recorded]);
       expect(publishChanged).toHaveBeenCalledWith([MANAGER], 'notices');
     });
 
@@ -526,9 +555,49 @@ describe('CommandCenterNoticesService', () => {
       await service.dismissDone('thread-a', first);
 
       expect((await service.list()).doneDismissals).toEqual([
-        { runId: 'thread-a', throughSeq: second },
+        { runId: 'thread-a', throughSeq: second, finishKey: null },
       ]);
       expect(publishChanged).not.toHaveBeenCalled();
+    });
+
+    it("dismisses a finished thread's finish with no seq through every Done row written so far", async () => {
+      await doneRowSeq('thread-a');
+      const run = finish('thread-a', '2026-11-28T10:00:00.000Z');
+      const newest = await new ItemDao(db.em).maxSeq(MANAGER);
+
+      await service.dismissDone('thread-a', null);
+
+      expect((await service.list()).doneDismissals).toEqual([
+        {
+          runId: 'thread-a',
+          throughSeq: newest,
+          finishKey: finishKeyHash(run),
+        },
+      ]);
+      expect(publishChanged).toHaveBeenCalledWith([MANAGER], 'notices');
+    });
+
+    it('records a new finish of a dismissed thread when it is dismissed again', async () => {
+      finish('thread-a', '2026-11-28T10:00:00.000Z');
+      await service.dismissDone('thread-a', null);
+      publishChanged.mockClear();
+      await service.dismissDone('thread-a', null);
+      expect(publishChanged).not.toHaveBeenCalled();
+
+      const again = finish('thread-a', '2026-11-28T12:00:00.000Z');
+      await service.dismissDone('thread-a', null);
+
+      expect((await service.list()).doneDismissals).toEqual([
+        expect.objectContaining({ finishKey: finishKeyHash(again) }),
+      ]);
+      expect(publishChanged).toHaveBeenCalledWith([MANAGER], 'notices');
+    });
+
+    it('refuses a dismissal with no seq of a thread that is not finished on the board', async () => {
+      await expect(
+        service.dismissDone('thread-a', null),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect((await service.list()).doneDismissals).toEqual([]);
     });
 
     it('refuses a seq that is not a Done row of that thread', async () => {

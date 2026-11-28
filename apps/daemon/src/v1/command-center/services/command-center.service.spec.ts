@@ -393,6 +393,94 @@ describe('CommandCenterService.board', () => {
     expect((await service.board()).pendingStarts).toBe(1);
   });
 
+  describe('finishKey', () => {
+    function finishedRun(
+      id: string,
+      lastActivityAt: string,
+      outcome: unknown = null,
+    ): RunWire {
+      return {
+        id,
+        status: 'completed',
+        title: id,
+        awaiting: null,
+        outcome,
+        goals: [],
+        pullRequests: [],
+        lastMessage: null,
+        lastActivityAt,
+        createdAt: new Date(now - HOUR).toISOString(),
+        taskIdentifier: null,
+      } as unknown as RunWire;
+    }
+
+    function outcomeOf(seq: number, summary: string): unknown {
+      return { source: 'outcome', seq, kind: 'done', summary };
+    }
+
+    const MOVED_AT = '2026-11-27T10:00:00.000Z';
+
+    it('is null while the thread is not done', async () => {
+      const [card] = await service.cardsOf(
+        null,
+        [{ ...finishedRun('working', MOVED_AT), status: 'running' }],
+        now,
+      );
+
+      expect(card?.column).not.toBe('done');
+      expect(card?.finishKey).toBeNull();
+    });
+
+    it('is set while the thread is done, and the same across two board reads of one finish', async () => {
+      await db.seedTask('finished', 'done');
+      const run = finishedRun('finished', MOVED_AT, outcomeOf(1, 'Shipped'));
+
+      const [first] = await service.cardsOf(null, [run], now);
+      const [second] = await service.cardsOf(null, [run], now);
+
+      expect(first?.column).toBe('done');
+      expect(first?.finishKey).toMatch(/^[0-9a-f]{16}$/);
+      expect(second?.finishKey).toBe(first?.finishKey);
+    });
+
+    it('changes when the thread finishes again with a new outcome', async () => {
+      await db.seedTask('finished', 'done');
+      const [once] = await service.cardsOf(
+        null,
+        [finishedRun('finished', MOVED_AT, outcomeOf(1, 'Shipped'))],
+        now,
+      );
+      const [again] = await service.cardsOf(
+        null,
+        [finishedRun('finished', MOVED_AT, outcomeOf(2, 'Shipped again'))],
+        now,
+      );
+
+      expect(again?.finishKey).not.toBe(once?.finishKey);
+    });
+
+    it('changes, for a thread with no recorded outcome, when it finishes again', async () => {
+      await db.seedTask('finished', 'done');
+      const [before] = await service.cardsOf(
+        null,
+        [{ ...finishedRun('finished', MOVED_AT), attentionAt: MOVED_AT }],
+        now,
+      );
+      const [after] = await service.cardsOf(
+        null,
+        [
+          {
+            ...finishedRun('finished', MOVED_AT),
+            attentionAt: '2026-11-27T11:00:00.000Z',
+          },
+        ],
+        now,
+      );
+
+      expect(after?.finishKey).not.toBe(before?.finishKey);
+    });
+  });
+
   it('answers no manager and no pending starts while there is no manager chat', async () => {
     await seedChatAged('thread', HOUR);
 

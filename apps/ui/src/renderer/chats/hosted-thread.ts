@@ -5,6 +5,12 @@ import type { ThreadIdentity } from '../components/thread-head';
 import type { ManagerNotices } from './use-manager-notices';
 import type { WorkingThread } from './working-threads-card';
 
+/** A finished thread the user has not handled yet, as the manager chat's pinned strip lists it. */
+export interface FinishedThreadLine {
+  runId: string;
+  title: string;
+}
+
 /**
  * A conversation the chat screen draws on its own, in another surface — the
  * team builder's chat dock, a thread's or a team's analysis popup. The run is
@@ -58,6 +64,8 @@ export interface HostedThread {
   threadIdentities?: ReadonlyMap<string, ThreadIdentity>;
   /** What each thread last reported, read live by the surface — see `ThreadReportsContext`. */
   threadReports?: ReadonlyMap<string, string>;
+  /** The finished threads the user has not dismissed or archived, listed under the pinned question. */
+  finishedThreads?: readonly FinishedThreadLine[];
   /** The conversation is the command center's manager, whose transcript draws review-item cards. */
   commandCenterManager?: boolean;
   /** Open Settings → Memory → Clean up on its Conflicts tab, for the manager's conflicts card. */

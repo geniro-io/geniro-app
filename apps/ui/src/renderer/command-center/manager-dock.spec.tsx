@@ -139,6 +139,7 @@ async function paint(): Promise<void> {
         threadIdentities={IDENTITIES}
         threadReports={REPORTS}
         workingThreads={[]}
+        finishedThreads={[]}
         active
         onOpenThread={vi.fn()}
         onTurnSettled={vi.fn()}

@@ -735,3 +735,80 @@ describe('groupTranscript with an analysis card', () => {
     ).toBe(false);
   });
 });
+
+describe('a tool item', () => {
+  const withTool = (tool: unknown) =>
+    readRecommendations(
+      item(9, 'recommendations', {
+        ...CARD,
+        sourceKind: 'system',
+        items: [{ ...CARD.items[0], id: 'G-1', target: 'geniro', tool }],
+      }),
+    )?.items[0]?.tool;
+
+  it('reads the subject, the verdict and the frozen figures', () => {
+    expect(
+      withTool({
+        subjectKind: 'tool',
+        subject: 'memory_read',
+        source: 'geniro',
+        verdict: 'remove',
+        figures: {
+          kind: 'tool',
+          name: 'memory_read',
+          source: 'geniro',
+          calls: 0,
+          subagent: 0,
+          errors: 0,
+          refused: 0,
+          avgMs: null,
+          avgChars: null,
+          firstAt: null,
+          lastAt: null,
+          knownSince: '2026-09-01T00:00:00.000Z',
+          offered: 80,
+          removable: true,
+          asOf: '2026-11-27T10:00:00.000Z',
+        },
+      }),
+    ).toEqual({
+      subjectKind: 'tool',
+      subject: 'memory_read',
+      source: 'geniro',
+      verdict: 'remove',
+      figures: {
+        calls: 0,
+        subagent: 0,
+        errors: 0,
+        refused: 0,
+        avgMs: null,
+        avgChars: null,
+        lastAt: null,
+        knownSince: '2026-09-01T00:00:00.000Z',
+        offered: 80,
+        asOf: '2026-11-27T10:00:00.000Z',
+      },
+    });
+  });
+
+  it('reads an item filed before tool items as having none', () => {
+    expect(
+      readRecommendations(item(5, 'recommendations', CARD))?.items[0]?.tool,
+    ).toBeNull();
+  });
+
+  it('keeps the verdict when the figures do not read, and drops a tool with no verdict', () => {
+    expect(
+      withTool({
+        subjectKind: 'capability',
+        subject: 'compaction',
+        source: '',
+        verdict: 'keep',
+        figures: { calls: 'many' },
+      }),
+    ).toMatchObject({ verdict: 'keep', figures: null });
+    expect(
+      withTool({ subjectKind: 'tool', subject: 'x', verdict: 'delete' }),
+    ).toBeNull();
+  });
+});

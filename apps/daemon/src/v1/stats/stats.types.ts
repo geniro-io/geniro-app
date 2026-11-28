@@ -13,6 +13,8 @@ import {
 import {
   commitShaSchema,
   type RunOutcomeAcceptance,
+  USAGE_SUBJECT_KINDS,
+  type UsageSubjectKind,
 } from '../agents/chat.types';
 import type { AgentKind } from '../runs/runs.types';
 
@@ -75,6 +77,70 @@ export interface ToolCallLedgerRow {
   ok: boolean;
   durationMs: number | null;
 }
+
+export { USAGE_SUBJECT_KINDS, type UsageSubjectKind };
+
+/** Whether the agent itself or one of its sub-agents made the call. */
+export const USAGE_ORIGINS = ['direct', 'subagent'] as const;
+export type UsageOrigin = (typeof USAGE_ORIGINS)[number];
+
+/** The row a usage delta lands on; `''` stands for none in every column. */
+export interface UsageCounterKey {
+  subjectKind: UsageSubjectKind;
+  subject: string;
+  source: string;
+  agentKind: string;
+  origin: UsageOrigin;
+  projectId: string;
+}
+
+/** What one or more uses add to a counter row; times are epoch ms. */
+export interface UsageCounterDelta {
+  calls: number;
+  errors: number;
+  refused: number;
+  durationMsTotal: number;
+  timedCalls: number;
+  resultCharsTotal: number;
+  sizedCalls: number;
+  offeredSessions: number;
+  firstAt: number | null;
+  lastAt: number | null;
+}
+
+export type UsageCounterRow = UsageCounterKey & UsageCounterDelta;
+
+/** A tool or capability this build knows, as the registry keeps it. */
+export interface UsageSubjectRow {
+  subjectKind: UsageSubjectKind;
+  subject: string;
+  source: string;
+  firstKnownAt: number;
+  lastKnownAt: number;
+}
+
+/** One `tool_call_events` row as the backfill folds it. */
+export interface ToolCallJournalRow {
+  id: string;
+  runId: string;
+  occurredAt: number;
+  agentKind: string | null;
+  tool: string;
+  mcpServer: string | null;
+  ok: boolean;
+  durationMs: number | null;
+}
+
+/** Where the backfill stands; null cursor before its first window. */
+export interface UsageCounterBackfillState {
+  cutoff: number;
+  cursor: { occurredAt: number; id: string } | null;
+  doneAt: number | null;
+}
+
+/** Remove may be proposed only for a Geniro tool known this long, offered this often, never called. */
+export const TOOL_REMOVAL_MIN_AGE_DAYS = 30;
+export const TOOL_REMOVAL_MIN_OFFERED_SESSIONS = 50;
 
 /** One stage change as the ledger keeps it (`usage_activity` kind `stage`). */
 export interface StageLedgerRow {
@@ -1466,3 +1532,112 @@ export const TeamVersionRestoredSchema = z.object({
 });
 // No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
 export type TeamVersionRestoredWire = z.infer<typeof TeamVersionRestoredSchema>;
+
+const UsageSubjectKindSchema = z.enum(USAGE_SUBJECT_KINDS);
+
+/** One tool, capability, skill or command, summed over agent, origin and project. */
+export const ToolUsageRowSchema = z
+  .object({
+    subjectKind: UsageSubjectKindSchema,
+    subject: z.string(),
+    source: z
+      .string()
+      .describe(
+        "the MCP server a tool came from (geniro for this app's own); empty for a CLI's own tool and for non-tools",
+      ),
+    calls: z.number(),
+    subagentCalls: z.number().describe('of the calls, made by sub-agents'),
+    agents: z
+      .array(z.string())
+      .describe('the CLIs that called it, the most calls first'),
+    errors: z
+      .number()
+      .describe('calls that ended in an error, refused ones included'),
+    refused: z
+      .number()
+      .describe(
+        'refusals the daemon attributed: a Geniro tool refused the input, or the user denied the permission; such a call usually also ended as an error, so most refusals are counted in errors too',
+      ),
+    avgDurationMs: z.number().nullable(),
+    avgResultChars: z.number().nullable(),
+    firstAt: z.string().nullable(),
+    lastAt: z.string().nullable(),
+    firstKnownAt: z
+      .string()
+      .nullable()
+      .describe(
+        'when this build first knew it; null for a tool only seen called',
+      ),
+    offeredSessions: z
+      .number()
+      .nullable()
+      .describe('CLI sessions it was listed to; Geniro tools only'),
+    removalEligible: z.boolean(),
+  })
+  .meta({ id: 'ToolUsageRow' });
+export type ToolUsageRowWire = z.infer<typeof ToolUsageRowSchema>;
+
+export const ToolUsageListSchema = z.object({
+  countingSince: z
+    .string()
+    .nullable()
+    .describe('the oldest counted use, the folded journal included'),
+  liveSince: z
+    .string()
+    .nullable()
+    .describe('when live counting began; capabilities count from here'),
+  rows: z.array(ToolUsageRowSchema).describe('every subject with a call'),
+  neverCalled: z
+    .array(ToolUsageRowSchema)
+    .describe('Geniro tools and capabilities this build has, never used'),
+});
+export type ToolUsageListWire = z.infer<typeof ToolUsageListSchema>;
+
+const ToolUsageSliceSchema = z.object({
+  calls: z.number(),
+  errors: z.number(),
+});
+
+export const ToolUsageSubjectSchema = z.object({
+  row: ToolUsageRowSchema,
+  byAgent: z.array(
+    ToolUsageSliceSchema.extend({ agentKind: z.string().nullable() }),
+  ),
+  byOrigin: z.array(
+    ToolUsageSliceSchema.extend({ origin: z.enum(USAGE_ORIGINS) }),
+  ),
+  byProject: z.array(
+    ToolUsageSliceSchema.extend({
+      projectId: z.string().nullable(),
+      name: z
+        .string()
+        .nullable()
+        .describe('null for a deleted project or no project'),
+    }),
+  ),
+});
+export type ToolUsageSubjectWire = z.infer<typeof ToolUsageSubjectSchema>;
+
+export const ToolUsageSubjectQuerySchema = z.object({
+  subjectKind: UsageSubjectKindSchema,
+  subject: z.string().min(1).max(256),
+  source: z.string().max(256).default(''),
+});
+
+/** Longest journal retention the setting accepts: ten years. */
+export const TOOL_CALL_LOG_RETENTION_MAX_DAYS = 3650;
+
+export const ToolUsageConfigSchema = z.object({
+  toolCallLogRetentionDays: z
+    .number()
+    .int()
+    .min(1)
+    .max(TOOL_CALL_LOG_RETENTION_MAX_DAYS)
+    .nullable()
+    .describe('days of the per-call tool log kept; null keeps it forever'),
+});
+export type ToolUsageConfig = z.infer<typeof ToolUsageConfigSchema>;
+
+export const ToolUsageConfigAckSchema = z.object({
+  toolCallLogRetentionDays: z.number().nullable(),
+});

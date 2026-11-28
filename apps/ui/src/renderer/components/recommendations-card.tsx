@@ -3,6 +3,7 @@ import { ArrowRight, Check, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 
 import type { ProjectRef } from '../projects/use-projects';
+import { formatMoment } from '../stats/stats-format';
 import { ErrorBanner } from './error-banner';
 import { MemberMarks, type MemberVerdict } from './member-marks';
 import {
@@ -85,6 +86,157 @@ export interface RecommendationView {
   movesWith?: string | null;
   /** A system analysis: the flag handles this item answers. */
   addressesFlags: readonly string[];
+  /** A system analysis: the tool or capability the item is about, and its frozen figures. */
+  tool?: RecommendationToolView | null;
+}
+
+/** What a system analysis proposes for one tool or capability. */
+export const TOOL_VERDICTS = [
+  'improve',
+  'remove',
+  'merge',
+  'keep',
+  'other',
+] as const;
+export type ToolVerdict = (typeof TOOL_VERDICTS)[number];
+
+export const TOOL_SUBJECT_KINDS = [
+  'tool',
+  'capability',
+  'skill',
+  'command',
+] as const;
+export type ToolSubjectKind = (typeof TOOL_SUBJECT_KINDS)[number];
+
+/** A tool item's subject and verdict, with the counters' figures the daemon froze when it filed the card. */
+export interface RecommendationToolView {
+  subjectKind: ToolSubjectKind;
+  subject: string;
+  source: string;
+  verdict: ToolVerdict;
+  figures: {
+    calls: number;
+    subagent: number;
+    errors: number;
+    refused: number;
+    avgMs: number | null;
+    avgChars: number | null;
+    lastAt: string | null;
+    knownSince: string | null;
+    offered: number | null;
+    asOf: string;
+  } | null;
+}
+
+const VERDICT_BADGE: Record<
+  ToolVerdict,
+  { label: string; variant: 'warning' | 'muted' | 'secondary' }
+> = {
+  improve: { label: 'Improve', variant: 'secondary' },
+  remove: { label: 'Remove', variant: 'warning' },
+  merge: { label: 'Merge', variant: 'secondary' },
+  keep: { label: 'Keep', variant: 'muted' },
+  other: { label: 'Other', variant: 'secondary' },
+};
+
+/** A subject's kind as the card names it: a Geniro tool, a CLI's own, another MCP server's. */
+function subjectKindLabel(tool: RecommendationToolView): string {
+  if (tool.subjectKind !== 'tool') {
+    return tool.subjectKind === 'capability'
+      ? 'Capability'
+      : tool.subjectKind === 'skill'
+        ? 'Skill'
+        : 'Command';
+  }
+  return tool.source === 'geniro'
+    ? 'Geniro tool'
+    : tool.source === ''
+      ? 'CLI tool'
+      : `MCP tool (${tool.source})`;
+}
+
+function ToolData({
+  tool,
+  look,
+}: {
+  tool: RecommendationToolView;
+  look: RecommendationsLook;
+}): React.JSX.Element {
+  const figures = tool.figures;
+  const rows: [string, string | null][] =
+    figures === null
+      ? []
+      : [
+          [
+            'Calls',
+            `${figures.calls.toLocaleString('en-US')} (${figures.subagent.toLocaleString('en-US')} by sub-agents)`,
+          ],
+          ['Errors', figures.errors.toLocaleString('en-US')],
+          ['Refused', figures.refused.toLocaleString('en-US')],
+          [
+            'Avg time',
+            figures.avgMs === null ? null : look.formatMs(figures.avgMs),
+          ],
+          [
+            'Avg result size',
+            figures.avgChars === null
+              ? null
+              : `${Math.round(figures.avgChars).toLocaleString('en-US')} chars`,
+          ],
+          [
+            'Last call',
+            figures.lastAt === null ? null : formatMoment(figures.lastAt),
+          ],
+          [
+            'Known since',
+            figures.knownSince === null
+              ? null
+              : formatMoment(figures.knownSince),
+          ],
+          [
+            'Offered in sessions',
+            figures.offered === null
+              ? null
+              : figures.offered.toLocaleString('en-US'),
+          ],
+        ];
+  return (
+    <div
+      data-slot="recommendation-tool-data"
+      className="flex flex-col gap-1.5 text-xs">
+      <p className="m-0 font-medium">
+        {tool.subject}{' '}
+        <span className="font-normal text-muted-foreground">
+          · {subjectKindLabel(tool)}
+        </span>
+      </p>
+      {figures === null ? (
+        <p className="m-0 text-muted-foreground">
+          No figures were frozen for this item.
+        </p>
+      ) : (
+        <>
+          <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 tabular-nums">
+            {rows.flatMap(([label, value]) =>
+              value === null
+                ? []
+                : [
+                    <dt key={`${label}:t`} className="text-muted-foreground">
+                      {label}
+                    </dt>,
+                    <dd key={`${label}:d`} className="m-0">
+                      {value}
+                    </dd>,
+                  ],
+            )}
+          </dl>
+          <p className="m-0 text-muted-foreground">
+            From the counters as of {formatMoment(figures.asOf)}
+          </p>
+        </>
+      )}
+    </div>
+  );
 }
 
 /** The other side of a move `id` is one side of, or null: the two are ticked together. */
@@ -513,6 +665,14 @@ function ItemRow({
                 {territory.label}
               </Badge>
               <Badge variant="outline">{item.kind}</Badge>
+              {item.tool === null || item.tool === undefined ? null : (
+                <Badge
+                  variant={VERDICT_BADGE[item.tool.verdict].variant}
+                  title={`${VERDICT_BADGE[item.tool.verdict].label} ${item.tool.subject}`}
+                  data-slot="recommendation-verdict">
+                  {VERDICT_BADGE[item.tool.verdict].label}
+                </Badge>
+              )}
               {moveWith === null ? null : (
                 <Badge
                   variant="muted"
@@ -596,6 +756,14 @@ function ItemRow({
             )}
           </div>
         </Disclosure>
+        {item.tool === null || item.tool === undefined ? null : (
+          <Disclosure
+            label="Data"
+            open={folds.isOpen(`${item.id}:data`)}
+            onToggle={() => folds.toggle(`${item.id}:data`)}>
+            <ToolData tool={item.tool} look={look} />
+          </Disclosure>
+        )}
         <Disclosure
           label="Change"
           open={folds.isOpen(`${item.id}:change`)}

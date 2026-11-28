@@ -10,6 +10,7 @@ import { GENIRO_ORM_RUNTIME } from '../../../../db/sqlite.driver';
 import { AgentFlagDao } from '../../../agents/dao/agent-flag.dao';
 import { ItemDao } from '../../../agents/dao/item.dao';
 import { RunDao } from '../../../agents/dao/run.dao';
+import { AgentEventBus } from '../../../agents/services/agent-events.bus';
 import {
   FlagBroker,
   type FlagRaiser,
@@ -24,6 +25,8 @@ import { Run } from '../../../runs/entity/run.entity';
 import type { McpCallContext } from '../../mcp.types';
 import { gatedForHiddenLessons } from '../hidden-lessons-gate';
 import { FlagIssueTool } from './flag-issue.tool';
+
+const usageBus = new AgentEventBus();
 
 describe('flag_issue', () => {
   let orm: MikroORM;
@@ -51,6 +54,7 @@ describe('flag_issue', () => {
       new RunDao(orm.em),
       new ItemDao(orm.em),
       flags,
+      usageBus,
     );
     tool = new FlagIssueTool(broker);
   });

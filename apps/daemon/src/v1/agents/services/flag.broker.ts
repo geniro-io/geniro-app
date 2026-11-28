@@ -21,6 +21,7 @@ import {
 } from '../utils/agent-flags';
 import { KeyedChain } from '../utils/keyed-chain';
 import { librarySlugOf } from '../utils/run-kind';
+import { AgentEventBus } from './agent-events.bus';
 import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 
 /** Who raises a flag: what only the pass running the agent knows. */
@@ -60,6 +61,7 @@ export class FlagBroker extends HostSinkBroker<FlagSink> {
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
     private readonly flagDao: AgentFlagDao,
+    private readonly bus: AgentEventBus,
   ) {
     super();
   }
@@ -96,9 +98,18 @@ export class FlagBroker extends HostSinkBroker<FlagSink> {
     input: AutomaticFlagInput,
   ): Promise<string | null> {
     try {
-      return await this.writes.run(runId, () =>
+      const handle = await this.writes.run(runId, () =>
         this.raiseAutomaticNow(runId, input),
       );
+      if (handle !== null) {
+        this.bus.publishUsageSignal({
+          kind: 'capability',
+          runId,
+          capability: 'automatic_flag',
+          ok: true,
+        });
+      }
+      return handle;
     } catch (err) {
       this.logger.warn(
         `run ${runId}: could not record the automatic flag ${input.cause}: ${err instanceof Error ? err.message : String(err)}`,

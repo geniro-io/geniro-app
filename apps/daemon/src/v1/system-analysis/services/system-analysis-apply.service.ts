@@ -328,9 +328,38 @@ export function cardBrief(item: CardRecommendationItem): string {
     ...(item.addressesFlags === undefined || item.addressesFlags.length === 0
       ? []
       : ['', `Flags it answers: ${item.addressesFlags.join(', ')}`]),
+    ...toolDataLines(item.tool),
     '',
     'Filed by a system analysis.',
   ].join('\n');
+}
+
+/** The verdict and the counters' figures the daemon froze for a tool item. */
+function toolDataLines(tool: CardRecommendationItem['tool']): string[] {
+  if (tool === undefined) {
+    return [];
+  }
+  const head = `Verdict: ${tool.verdict} — ${tool.subjectKind} ${tool.subject}${tool.source === '' ? '' : ` (${tool.source})`}`;
+  const figures = tool.figures;
+  if (figures === undefined) {
+    return ['', head];
+  }
+  const line = (label: string, value: string | number | null): string[] =>
+    value === null ? [] : [`- ${label}: ${value}`];
+  return [
+    '',
+    `## Data (from the counters as of ${figures.asOf})`,
+    head,
+    ...line('Calls', figures.calls),
+    ...line('Of them by sub-agents', figures.subagent),
+    ...line('Errors', figures.errors),
+    ...line('Refused', figures.refused),
+    ...line('Average time, ms', figures.avgMs),
+    ...line('Average result size, characters', figures.avgChars),
+    ...line('Last call', figures.lastAt),
+    ...line('Known since', figures.knownSince),
+    ...line('Offered in sessions', figures.offered),
+  ];
 }
 
 function filedNote(

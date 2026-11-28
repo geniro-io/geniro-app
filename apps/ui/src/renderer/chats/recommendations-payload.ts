@@ -9,7 +9,10 @@ import {
   type RecommendationRisk,
   type RecommendationsTimingView,
   type RecommendationTerritory,
+  type RecommendationToolView,
   type RecommendationView,
+  TOOL_SUBJECT_KINDS,
+  TOOL_VERDICTS,
 } from '../components/recommendations-card';
 import type {
   TeamAgentStatsView,
@@ -27,8 +30,9 @@ import type {
  * carries.
  *
  * TWIN PARSER: apps/daemon/src/v1/agents/chat.types.ts —
- * `RecommendationsPayloadSchema` (with `RecommendationsTeamStatsSchema` and
- * `MemberAssessmentSchema`),
+ * `RecommendationsPayloadSchema` (with `RecommendationsTeamStatsSchema`,
+ * `MemberAssessmentSchema` and an item's `tool` block of
+ * `CardRecommendationItemSchema`),
  * `RecommendationMarksSchema` (the outcome rows) and
  * `RecommendationApplySchema`. The daemon validates before it writes, so these
  * are defensive rather than strict: an entry that does not read is dropped, and
@@ -417,6 +421,51 @@ function readMember(value: unknown): MemberAssessmentView | null {
   };
 }
 
+function readToolFigures(value: unknown): RecommendationToolView['figures'] {
+  const row = record(value);
+  const asOf = text(row?.asOf);
+  const whole = counts(row, [
+    'calls',
+    'subagent',
+    'errors',
+    'refused',
+  ] as const);
+  if (row === null || asOf === null || whole === null) {
+    return null;
+  }
+  return {
+    ...whole,
+    avgMs: count(row.avgMs),
+    avgChars: count(row.avgChars),
+    lastAt: text(row.lastAt),
+    knownSince: text(row.knownSince),
+    offered: count(row.offered),
+    asOf,
+  };
+}
+
+function readTool(value: unknown): RecommendationToolView | null {
+  const row = record(value);
+  const subjectKind = oneOf(row?.subjectKind, TOOL_SUBJECT_KINDS);
+  const subject = text(row?.subject);
+  const verdict = oneOf(row?.verdict, TOOL_VERDICTS);
+  if (
+    row === null ||
+    subjectKind === null ||
+    subject === null ||
+    verdict === null
+  ) {
+    return null;
+  }
+  return {
+    subjectKind,
+    subject,
+    source: typeof row.source === 'string' ? row.source : '',
+    verdict,
+    figures: readToolFigures(row.figures),
+  };
+}
+
 function readItem(value: unknown): RecommendationView | null {
   const row = record(value);
   const id = text(row?.id);
@@ -453,6 +502,7 @@ function readItem(value: unknown): RecommendationView | null {
           },
         }),
     movesWith: text(row.movesWith),
+    tool: readTool(row.tool),
     addressesFlags: Array.isArray(row.addressesFlags)
       ? row.addressesFlags.filter(
           (handle): handle is string =>

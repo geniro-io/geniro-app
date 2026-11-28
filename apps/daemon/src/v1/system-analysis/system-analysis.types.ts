@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   AgentFlagRunKindSchema,
   AgentFlagWireSchema,
+  DigestToolUsageSchema,
   ItemWireSchema,
   RecommendationIdSchema,
   RunWireSchema,
@@ -27,6 +28,8 @@ export const SYSTEM_DIGEST_TOOL_ERRORS = 15;
 /** How much of a period error signature's first error text the digest quotes. */
 export const SYSTEM_DIGEST_TOOL_ERROR_CHARS = 200;
 export const SYSTEM_ANALYSIS_DAYS_MAX = 90;
+/** Usage-counter subjects with calls a digest lists, the most called first; every never-called one is listed beside them. */
+export const SYSTEM_DIGEST_TOOL_USAGE_ROWS = 150;
 /** How long a start reuses the digest the scope read built for the same period length. */
 export const SYSTEM_DIGEST_REUSE_MS = 5 * 60_000;
 
@@ -137,6 +140,14 @@ export const SystemDigestTotalsSchema = z
     geniroToolErrorGroups: z.number().int().optional(),
     /** Of the threads with signals, geniro's own: analyses and lessons chats. */
     systemThreads: z.number().int(),
+    /** The usage counters in one line: subjects used, their calls, and never-called subjects. */
+    toolUsage: z
+      .object({
+        subjects: z.number().int(),
+        calls: z.number().int(),
+        neverCalled: z.number().int(),
+      })
+      .optional(),
   })
   .meta({ id: 'SystemDigestTotals' });
 export type SystemDigestTotals = z.infer<typeof SystemDigestTotalsSchema>;
@@ -152,6 +163,8 @@ export const SystemDigestSchema = z
     goneFlags: z.array(AgentFlagWireSchema),
     /** The period's geniro tool failures by tool and error signature, the most frequent first. */
     geniroToolErrors: z.array(PeriodToolErrorSchema).optional(),
+    /** Every tool and capability's use, counted for good rather than over the period. */
+    toolUsage: DigestToolUsageSchema.optional(),
     threads: z.array(DigestThreadSchema),
   })
   .meta({ id: 'SystemDigest' });

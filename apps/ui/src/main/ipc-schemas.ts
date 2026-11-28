@@ -26,6 +26,7 @@ import {
   PROFILE_COLORS,
   TERMINAL_MAX_COLS,
   TERMINAL_MAX_ROWS,
+  TOOL_CALL_LOG_RETENTION_MAX_DAYS,
 } from '../shared/contracts';
 import { SEARCH_MODEL_FAILURE_REASONS } from '../shared/search-model';
 import { THEME_PREFERENCES } from '../shared/themes';
@@ -522,6 +523,15 @@ export const settingsPatchSchema = z.strictObject({
   // absent means "this patch does not mention it" while null is the user
   // switching the sweep off, and those must not be the same write.
   archiveRetentionDays: z.number().int().min(1).max(3650).nullable().optional(),
+  // The tool log's retention, bounded to what the daemon's route accepts;
+  // null keeps the log forever, absent leaves it as it is.
+  toolCallLogRetentionDays: z
+    .number()
+    .int()
+    .min(1)
+    .max(TOOL_CALL_LOG_RETENTION_MAX_DAYS)
+    .nullable()
+    .optional(),
   // The auto-forget window, bounded and nullable like the retention window
   // above: null switches the daemon's sweep off, absent leaves it as it is.
   memoryAutoForgetAfterDays: autoForgetAfterDaysSchema.optional(),

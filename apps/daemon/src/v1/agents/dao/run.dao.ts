@@ -13,6 +13,7 @@ import type {
   RunFacts,
   RunListPage,
   RunPullRequest,
+  RunUsageFacts,
   SettleFigures,
   TaskStageLine,
   ThreadListFilter,
@@ -666,6 +667,43 @@ export class RunDao extends BaseDao<Run> {
     const facts: RunFacts[] = [];
     for (const batch of idBatches(runIds)) {
       facts.push(...(await read({ id: { $in: batch } })));
+    }
+    return facts;
+  }
+
+  /** {@link runFacts} plus the project and analysis columns, for the usage counters. A run that no longer exists is absent. */
+  async usageFacts(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<RunUsageFacts[]> {
+    const facts: RunUsageFacts[] = [];
+    for (const batch of idBatches(runIds)) {
+      const rows = await this.getRepo(txEm).find(
+        { id: { $in: batch } },
+        {
+          fields: [
+            'id',
+            'teamId',
+            'agentKind',
+            'createdAt',
+            'projectId',
+            'analysisPurpose',
+            'analysisTeamSlug',
+          ],
+          disableIdentityMap: true,
+        },
+      );
+      facts.push(
+        ...rows.map((run) => ({
+          id: run.id,
+          teamId: run.teamId,
+          agentKind: run.agentKind,
+          createdAt: run.createdAt,
+          projectId: run.projectId,
+          analysisPurpose: run.analysisPurpose,
+          analysisTeamSlug: run.analysisTeamSlug,
+        })),
+      );
     }
     return facts;
   }

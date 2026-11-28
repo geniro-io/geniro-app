@@ -13,6 +13,8 @@ import {
   type AnalysisFiled,
   type AnalysisSink,
   type AnalysisTurn,
+  type DigestToolUsage,
+  DigestToolUsageSchema,
   type ItemWire,
   KNOWLEDGE_ITEM_KINDS,
   KNOWLEDGE_MOVE_SOURCES,
@@ -31,6 +33,7 @@ import {
   type TeamPopulationReader,
   type TeamVersionIndexReader,
   type ThreadTimeline,
+  type ToolUsageFigures,
 } from '../chat.types';
 import { AgentFlagDao } from '../dao/agent-flag.dao';
 import { ItemDao } from '../dao/item.dao';
@@ -41,6 +44,7 @@ import {
   overlayProjectIdsOf,
 } from '../utils/analysed-runs';
 import { laneOf } from '../utils/analysis-lane';
+import { asRecord } from '../utils/json-util';
 import {
   everySelectedMarked,
   knowledgeWriteOf,
@@ -202,6 +206,10 @@ export class AnalysisReportsService {
     );
     problems.push(...(await this.documentProblems(report)));
     problems.push(...(await this.flagProblems(report)));
+    const toolUsage = report.items.some((item) => item.tool !== undefined)
+      ? await this.frozenToolUsage(turn.analysisRunId, em)
+      : null;
+    problems.push(...checkToolItems(report, sourceKind, toolUsage));
     // Each cited row is checked against the run it names, at that run's own
     // snapshot — a team analysis cites several.
     const cited = new Map<string, { snapshotSeq: number; seqs: Set<number> }>();
@@ -271,6 +279,7 @@ export class AnalysisReportsService {
     }
     const payload: RecommendationsPayload = {
       ...report,
+      items: withToolFigures(report.items, toolUsage),
       sourceRunId: turn.sourceRunId,
       sourceKind,
       timing: reading === null ? null : timingOf(reading.timeline),
@@ -285,6 +294,21 @@ export class AnalysisReportsService {
         ? {}
         : { members: report.members.length }),
     };
+  }
+
+  /** The usage counters the analysis was started on, as its run froze them; null when it carries none. */
+  private async frozenToolUsage(
+    analysisRunId: string,
+    em: EntityManager,
+  ): Promise<DigestToolUsage | null> {
+    const run = await this.runDao.getById(analysisRunId, em);
+    if (run?.analysisDigest === null || run?.analysisDigest === undefined) {
+      return null;
+    }
+    const parsed = DigestToolUsageSchema.safeParse(
+      asRecord(JSON.parse(run.analysisDigest))?.toolUsage,
+    );
+    return parsed.success ? parsed.data : null;
   }
 
   /** Each flag an item says it answers must be one agents raised. */
@@ -609,6 +633,75 @@ function knowledgeItemProblems(
     );
   }
   return problems;
+}
+
+function figuresOf(
+  usage: DigestToolUsage | null,
+  tool: NonNullable<RecommendationItem['tool']>,
+): ToolUsageFigures | undefined {
+  return [...(usage?.rows ?? []), ...(usage?.neverCalled ?? [])].find(
+    (row) =>
+      row.kind === tool.subjectKind &&
+      row.name === tool.subject &&
+      row.source === tool.source,
+  );
+}
+
+/**
+ * Why a report's tool subjects cannot go on a card: a subject only on a G-
+ * item of a system analysis, named as its frozen digest lists it, and Remove
+ * only where the daemon found it eligible.
+ */
+export function checkToolItems(
+  report: RecommendationsReport,
+  sourceKind: AnalysedThreadKind,
+  usage: DigestToolUsage | null,
+): string[] {
+  const problems: string[] = [];
+  for (const item of report.items) {
+    const tool = item.tool;
+    if (tool === undefined) {
+      continue;
+    }
+    if (item.target !== 'geniro' || sourceKind !== 'system') {
+      problems.push(
+        `TOOL_SUBJECT_NOT_FOR_TARGET — ${item.id}: a tool subject goes only on a G- item of a system analysis`,
+      );
+      continue;
+    }
+    const figures = figuresOf(usage, tool);
+    if (figures === undefined) {
+      problems.push(
+        `UNKNOWN_TOOL_SUBJECT — ${item.id}: ${tool.subjectKind} ${tool.subject}${tool.source === '' ? '' : ` (${tool.source})`} is not in view=digest toolUsage — name a subject, its kind and source exactly as it lists them`,
+      );
+      continue;
+    }
+    if (tool.verdict === 'remove' && !figures.removable) {
+      problems.push(
+        `REMOVE_BELOW_THRESHOLD — ${item.id}: Remove needs a Geniro tool known 30+ days, offered in 50+ sessions and never called; ${tool.subject} is known since ${figures.knownSince ?? 'never'}, offered in ${figures.offered ?? 0} sessions, called ${figures.calls} times`,
+      );
+    }
+  }
+  return problems;
+}
+
+/** Each tool item with the figures the daemon froze, never ones the model typed. */
+function withToolFigures(
+  items: RecommendationsReport['items'],
+  usage: DigestToolUsage | null,
+): RecommendationsPayload['items'] {
+  return items.map((item) => {
+    const figures =
+      item.tool === undefined || usage === null
+        ? undefined
+        : figuresOf(usage, item.tool);
+    return item.tool === undefined || figures === undefined || usage === null
+      ? item
+      : {
+          ...item,
+          tool: { ...item.tool, figures: { ...figures, asOf: usage.asOf } },
+        };
+  });
 }
 
 /** Why a report's items cannot go on a card as they are. */

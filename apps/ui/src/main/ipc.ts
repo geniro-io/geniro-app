@@ -425,6 +425,7 @@ export function registerIpc(
     // and removing unhelpful entries forgets them on the marks of other threads.
     // `resourceAlerts` reaches the daemon's desktop-only config route.
     // `lessons` picks what a reflection spends, through another such route.
+    // `toolCallLogRetentionDays` arms a sweep that deletes the tool log.
     [
       'cliPaths',
       'daemonInspect',
@@ -434,6 +435,7 @@ export function registerIpc(
       'resourceAlerts',
       'semanticSearch',
       'sharing',
+      'toolCallLogRetentionDays',
     ],
     'sets a field the desktop alone may set',
   );

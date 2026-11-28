@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { Run } from '../../runs/entity/run.entity';
+import { metricLedgerDb } from '../__tests__/metric-ledger-db';
 import {
   restoreTeamVersionSchema,
   teamStatsParamsSchema,
@@ -8,11 +10,17 @@ import {
 import type { StatsService } from '../services/stats.service';
 import type { TeamStatsService } from '../services/team-stats.service';
 import type { TeamVersionsService } from '../services/team-versions.service';
+import type { ToolCallLogRetentionService } from '../services/tool-call-log-retention.service';
+import type { ToolUsageService } from '../services/tool-usage.service';
 import type {
   TeamStatsWire,
   TeamVersionRestoredWire,
   TeamVersionsWire,
   UsageStatsWire,
+} from '../stats.types';
+import {
+  ToolUsageConfigSchema,
+  ToolUsageSubjectQuerySchema,
 } from '../stats.types';
 import { StatsController } from './stats.controller';
 
@@ -29,6 +37,8 @@ describe('StatsController', () => {
         { usage } as unknown as StatsService,
         {} as TeamVersionsService,
         {} as TeamStatsService,
+        {} as ToolUsageService,
+        {} as ToolCallLogRetentionService,
       ),
       usage,
     };
@@ -65,6 +75,8 @@ describe('StatsController', () => {
         {} as StatsService,
         { read } as unknown as TeamVersionsService,
         {} as TeamStatsService,
+        {} as ToolUsageService,
+        {} as ToolCallLogRetentionService,
       );
 
       await expect(route.readTeamVersions({ slug: 'dev-team' })).resolves.toBe(
@@ -99,6 +111,8 @@ describe('StatsController', () => {
         {} as StatsService,
         {} as TeamVersionsService,
         { read } as unknown as TeamStatsService,
+        {} as ToolUsageService,
+        {} as ToolCallLogRetentionService,
       );
 
       await expect(route.readTeamStats({ slug: 'dev-team' })).resolves.toBe(
@@ -123,6 +137,8 @@ describe('StatsController', () => {
         {} as StatsService,
         { restore } as unknown as TeamVersionsService,
         {} as TeamStatsService,
+        {} as ToolUsageService,
+        {} as ToolCallLogRetentionService,
       );
 
       await expect(
@@ -147,5 +163,164 @@ describe('StatsController', () => {
     ])('refuses %j before it reaches the service', (body) => {
       expect(restoreTeamVersionSchema.safeParse(body).success).toBe(false);
     });
+  });
+});
+
+describe('StatsController — tool usage', () => {
+  let db: Awaited<ReturnType<typeof metricLedgerDb>>;
+  let route: StatsController;
+
+  beforeEach(async () => {
+    db = await metricLedgerDb();
+    route = new StatsController(
+      {} as StatsService,
+      {} as TeamVersionsService,
+      {} as TeamStatsService,
+      db.toolUsage,
+      db.retention,
+    );
+  });
+
+  afterEach(async () => {
+    await db.orm.close(true);
+  });
+
+  it('counts every subject and every call, past any page and from runs deleted since', async () => {
+    await db.seedRun('r1', { agentKind: 'claude' });
+    for (let i = 0; i < 30; i += 1) {
+      await db.feed(
+        'r1',
+        'tool_call',
+        { id: `c${i}`, name: `tool_${i}` },
+        '2026-11-01T10:00:00.000Z',
+      );
+      await db.feed(
+        'r1',
+        'tool_result',
+        { id: `c${i}`, isError: false },
+        '2026-11-01T10:00:01.000Z',
+      );
+    }
+    await db.feed(
+      'r1',
+      'tool_call',
+      { id: 'again', name: 'tool_29' },
+      '2026-11-01T10:01:00.000Z',
+    );
+    await db.feed(
+      'r1',
+      'tool_result',
+      { id: 'again', isError: true },
+      '2026-11-01T10:01:01.000Z',
+    );
+    await db.em.fork().nativeDelete(Run, { id: 'r1' });
+    db.bus.publishRunDeleted('r1');
+
+    const brief = await route.readToolUsage();
+
+    expect(brief.rows).toHaveLength(30);
+    expect(brief.rows[0]).toMatchObject({
+      subject: 'tool_29',
+      calls: 2,
+      errors: 1,
+    });
+    expect(brief.rows.reduce((sum, row) => sum + row.calls, 0)).toBe(31);
+  });
+
+  it('lists a Geniro tool this build serves and nobody called under never called, at zero', async () => {
+    await db.registry.registerGeniroTools(['note_thread']);
+
+    const brief = await route.readToolUsage();
+
+    expect(brief.neverCalled).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          subject: 'note_thread',
+          source: 'geniro',
+          calls: 0,
+        }),
+      ]),
+    );
+  });
+
+  it("answers one subject's split", async () => {
+    await db.seedRun('r2', { agentKind: 'codex' });
+    await db.feed(
+      'r2',
+      'tool_call',
+      { id: 'x', name: 'shell', toolKind: 'execute' },
+      '2026-11-01T10:00:00.000Z',
+    );
+    await db.feed(
+      'r2',
+      'tool_result',
+      { id: 'x', isError: false },
+      '2026-11-01T10:00:01.000Z',
+    );
+
+    const subject = await route.readToolUsageSubject({
+      subjectKind: 'tool',
+      subject: 'shell',
+      source: '',
+    });
+
+    expect(subject.row).toMatchObject({ calls: 1 });
+    expect(subject.byAgent).toEqual([
+      { agentKind: 'codex', calls: 1, errors: 0 },
+    ]);
+  });
+
+  it('dates the counting from the oldest folded use, and live counting from the cutoff', async () => {
+    await db.backfill.onModuleInit();
+    const cutoff = db.backfill.cutoff ?? 0;
+    const brief = await route.readToolUsage();
+    expect(brief.countingSince).toBe(new Date(cutoff).toISOString());
+
+    await db.counterDao.add([
+      {
+        subjectKind: 'tool',
+        subject: 'Read',
+        source: '',
+        agentKind: 'claude',
+        origin: 'direct',
+        projectId: '',
+        calls: 1,
+        errors: 0,
+        refused: 0,
+        durationMsTotal: 0,
+        timedCalls: 0,
+        resultCharsTotal: 0,
+        sizedCalls: 0,
+        offeredSessions: 0,
+        firstAt: 1_000,
+        lastAt: 1_000,
+      },
+    ]);
+
+    expect(await route.readToolUsage()).toMatchObject({
+      countingSince: new Date(1_000).toISOString(),
+      liveSince: new Date(cutoff).toISOString(),
+    });
+  });
+
+  it('hands the pushed retention to the sweep and answers it back', () => {
+    expect(route.setToolUsageConfig({ toolCallLogRetentionDays: 30 })).toEqual({
+      toolCallLogRetentionDays: 30,
+    });
+    expect(db.retention.configured).toBe(30);
+  });
+
+  it.each([
+    { toolCallLogRetentionDays: 0 },
+    { toolCallLogRetentionDays: 3651 },
+    { toolCallLogRetentionDays: 1.5 },
+  ])('refuses the retention %j', (body) => {
+    expect(ToolUsageConfigSchema.safeParse(body).success).toBe(false);
+  });
+
+  it('refuses a subject query with no name', () => {
+    expect(
+      ToolUsageSubjectQuerySchema.safeParse({ subjectKind: 'tool' }).success,
+    ).toBe(false);
   });
 });

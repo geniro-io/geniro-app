@@ -82,6 +82,7 @@ const mocks = vi.hoisted(() => {
       minFreeDiskBytes: 10 * 1024 ** 3,
     },
     archiveRetentionDays: null,
+    toolCallLogRetentionDays: 90,
     memoryAutoForgetAfterDays: null,
     memoryRemoveNotUseful: true,
     historyPageSize: 1000,
@@ -704,6 +705,16 @@ describe('registerIpc remote-access channels', () => {
     expect(
       entry.policy.refuseRemoteArgs?.([{ sidebarCollapsed: true }]),
     ).toBeFalsy();
+  });
+
+  it('refuses a remote settings write of the tool log retention, which arms a sweep that deletes it', () => {
+    const entry = registry.get(IPC.updateSettings);
+    if (!entry || entry.policy.remote !== 'allow') {
+      throw new Error('updateSettings is not remotely callable');
+    }
+    expect(
+      entry.policy.refuseRemoteArgs?.([{ toolCallLogRetentionDays: 30 }]),
+    ).toContain('toolCallLogRetentionDays');
   });
 
   it('a paired device cannot arm the sweep', () => {

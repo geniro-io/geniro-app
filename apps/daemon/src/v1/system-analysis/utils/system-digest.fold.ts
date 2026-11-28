@@ -1,9 +1,18 @@
-import type { AgentFlagRunKind, AgentFlagWire } from '../../agents/chat.types';
+import type {
+  AgentFlagRunKind,
+  AgentFlagWire,
+  DigestToolUsage,
+  ToolUsageFigures,
+} from '../../agents/chat.types';
 import {
   type FailedCall,
   groupFailures,
 } from '../../agents/utils/failure-groups';
 import { GENIRO_MCP_SERVER } from '../../agents/utils/tool-metric';
+import type {
+  ToolUsageListWire,
+  ToolUsageRowWire,
+} from '../../stats/stats.types';
 import {
   type DigestSignals,
   type DigestThread,
@@ -15,11 +24,53 @@ import {
   SYSTEM_DIGEST_TOOL_ERROR_CHARS,
   SYSTEM_DIGEST_TOOL_ERRORS,
   SYSTEM_DIGEST_TOOL_ERRORS_PER_THREAD,
+  SYSTEM_DIGEST_TOOL_USAGE_ROWS,
   SYSTEM_DIGEST_TOOLS_PER_THREAD,
   SYSTEM_DIGEST_WEIGHTS,
   type SystemDigest,
   type SystemPeriod,
 } from '../system-analysis.types';
+
+/** One brief row as the digest freezes it. */
+function usageFiguresOf(row: ToolUsageRowWire): ToolUsageFigures {
+  return {
+    kind: row.subjectKind,
+    name: row.subject,
+    source: row.source,
+    calls: row.calls,
+    subagent: row.subagentCalls,
+    errors: row.errors,
+    refused: row.refused,
+    avgMs: row.avgDurationMs,
+    avgChars: row.avgResultChars,
+    firstAt: row.firstAt,
+    lastAt: row.lastAt,
+    knownSince: row.firstKnownAt,
+    offered: row.offeredSessions,
+    removable: row.removalEligible,
+  };
+}
+
+/**
+ * The usage counters as a system analysis reads them: the
+ * {@link SYSTEM_DIGEST_TOOL_USAGE_ROWS} most called subjects and every
+ * subject this build has that was never used.
+ */
+export function digestToolUsage(
+  list: ToolUsageListWire,
+  asOf: string,
+): DigestToolUsage {
+  return {
+    asOf,
+    countingSince: list.countingSince,
+    liveSince: list.liveSince,
+    subjects: list.rows.length,
+    calls: list.rows.reduce((sum, row) => sum + row.calls, 0),
+    leftOut: Math.max(0, list.rows.length - SYSTEM_DIGEST_TOOL_USAGE_ROWS),
+    rows: list.rows.slice(0, SYSTEM_DIGEST_TOOL_USAGE_ROWS).map(usageFiguresOf),
+    neverCalled: list.neverCalled.map(usageFiguresOf),
+  };
+}
 
 /** One failed call as the digest counts it. */
 export interface DigestFailedCall {

@@ -83,6 +83,7 @@ import { ShareConfigPush } from './share-config-push';
 import type { RunStartDeps } from './task-run-start';
 import { TerminalSessions } from './terminal-sessions';
 import { ThreadStartConductor } from './thread-start-conductor';
+import { ToolUsageConfigPush } from './tool-usage-config-push';
 import { reportUncaughtErrors } from './uncaught-error-report';
 import { createUpdateService } from './update-service';
 import {
@@ -210,6 +211,15 @@ const keptSessionConfigPush = new KeptSessionConfigPush((message) => {
     source: 'kept-session-config',
   });
 });
+/**
+ * The tool log's retention, the same way: the daemon deletes nothing until the
+ * first push, so every daemon is told on start and after any write that changed it.
+ */
+const toolUsageConfigPush = new ToolUsageConfigPush((message) => {
+  void reportMainLog(supervisor.getHandle(), 'warn', message, {
+    source: 'tool-usage-config',
+  });
+});
 const commandCenterInstructionsPush = new CommandCenterInstructionsPush(
   (message) => {
     void reportMainLog(supervisor.getHandle(), 'warn', message, {
@@ -257,6 +267,9 @@ onSettingsWritten((settings) => {
   void keptSessionConfigPush.pushIfChanged(supervisor.getHandle(), {
     idleMinutes: settings.keptSessionIdleMinutes,
     limit: settings.keptSessionLimit,
+  });
+  void toolUsageConfigPush.pushIfChanged(supervisor.getHandle(), {
+    toolCallLogRetentionDays: settings.toolCallLogRetentionDays,
   });
   void commandCenterInstructionsPush.pushIfChanged(supervisor.getHandle(), {
     instructions: settings.commandCenterInstructions,
@@ -852,6 +865,9 @@ function pushDaemonConfig(handle: DaemonHandle): void {
   void keptSessionConfigPush.push(handle, {
     idleMinutes: settings.keptSessionIdleMinutes,
     limit: settings.keptSessionLimit,
+  });
+  void toolUsageConfigPush.push(handle, {
+    toolCallLogRetentionDays: settings.toolCallLogRetentionDays,
   });
   void commandCenterInstructionsPush.push(handle, {
     instructions: settings.commandCenterInstructions,

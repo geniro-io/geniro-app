@@ -1,3 +1,4 @@
+import { HOST_BOARD_TOOLS } from '../../../agents/chat.types';
 import { isHostBoardTool } from '../../../agents/utils/host-board';
 import type { TaskBoardBroker } from '../../../teams/services/task-board.broker';
 import type {
@@ -23,6 +24,10 @@ import type {
  */
 export class BoardTools implements McpTool {
   constructor(private readonly board: TaskBoardBroker) {}
+
+  names(): readonly string[] {
+    return HOST_BOARD_TOOLS;
+  }
 
   handles(name: string): boolean {
     return isHostBoardTool(name);

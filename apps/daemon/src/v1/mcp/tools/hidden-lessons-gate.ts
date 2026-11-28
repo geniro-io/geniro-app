@@ -29,6 +29,7 @@ export function gatedForHiddenLessons(
   analysis: Pick<AnalysisBroker, 'isHiddenLessons'>,
 ): McpTool {
   return {
+    names: () => tool.names(),
     handles: (name) => tool.handles(name),
     list: (context) => {
       const listed = tool.list(context);

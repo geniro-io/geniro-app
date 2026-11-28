@@ -1,7 +1,17 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
+import { DesktopOnlyGuard } from '../../../auth/desktop-only.guard';
 import {
   LineBaselineDto,
   LineBaselineRequestDto,
@@ -15,17 +25,26 @@ import {
   TeamVersionRestoredDto,
   TeamVersionsDto,
   TeamVersionsQueryDto,
+  ToolUsageConfigAckDto,
+  ToolUsageConfigDto,
+  ToolUsageListDto,
+  ToolUsageSubjectDto,
+  ToolUsageSubjectQueryDto,
   UsageStatsDto,
   UsageStatsQueryDto,
 } from '../dto/stats.dto';
 import { StatsService } from '../services/stats.service';
 import { TeamStatsService } from '../services/team-stats.service';
 import { TeamVersionsService } from '../services/team-versions.service';
+import { ToolCallLogRetentionService } from '../services/tool-call-log-retention.service';
+import { ToolUsageService } from '../services/tool-usage.service';
 import type {
   LineBaselineWire,
   TeamStatsWire,
   TeamVersionRestoredWire,
   TeamVersionsWire,
+  ToolUsageListWire,
+  ToolUsageSubjectWire,
   UsageStatsWire,
 } from '../stats.types';
 
@@ -43,7 +62,37 @@ export class StatsController {
     private readonly stats: StatsService,
     private readonly versions: TeamVersionsService,
     private readonly teamStats: TeamStatsService,
+    private readonly toolUsage: ToolUsageService,
+    private readonly toolLog: ToolCallLogRetentionService,
   ) {}
+
+  @Get('tool-usage')
+  @ApiOperation({ operationId: 'readToolUsage' })
+  @ZodResponse({ status: 200, type: ToolUsageListDto })
+  readToolUsage(): Promise<ToolUsageListWire> {
+    return this.toolUsage.list();
+  }
+
+  @Get('tool-usage/subject')
+  @ApiOperation({ operationId: 'readToolUsageSubject' })
+  @ZodResponse({ status: 200, type: ToolUsageSubjectDto })
+  readToolUsageSubject(
+    @Query() query: ToolUsageSubjectQueryDto,
+  ): Promise<ToolUsageSubjectWire> {
+    return this.toolUsage.subject(query);
+  }
+
+  /** Desktop only: the value is Electron main's to push from settings.json. */
+  @Put('tool-usage/config')
+  @UseGuards(DesktopOnlyGuard)
+  @ApiOperation({ operationId: 'setToolUsageConfig' })
+  @ZodResponse({ status: 200, type: ToolUsageConfigAckDto })
+  setToolUsageConfig(@Body() body: ToolUsageConfigDto): {
+    toolCallLogRetentionDays: number | null;
+  } {
+    this.toolLog.configure(body.toolCallLogRetentionDays);
+    return { toolCallLogRetentionDays: body.toolCallLogRetentionDays };
+  }
 
   @Get('usage')
   @ApiOperation({ operationId: 'readUsageStats' })

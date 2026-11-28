@@ -52,6 +52,10 @@ export abstract class BaseMcpTool implements McpTool {
     context: McpCallContext,
   ): Promise<McpToolResult>;
 
+  names(): readonly string[] {
+    return [this.name];
+  }
+
   handles(name: string): boolean {
     return name === this.name;
   }

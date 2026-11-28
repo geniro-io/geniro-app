@@ -6,6 +6,11 @@ import {
   TeamStatsWireSchema,
   TeamVersionRestoredSchema,
   TeamVersionsWireSchema,
+  ToolUsageConfigAckSchema,
+  ToolUsageConfigSchema,
+  ToolUsageListSchema,
+  ToolUsageSubjectQuerySchema,
+  ToolUsageSubjectSchema,
   UsageStatsWireSchema,
 } from '../stats.types';
 
@@ -76,6 +81,24 @@ export const restoreTeamVersionSchema = z.object({
 });
 export class RestoreTeamVersionDto extends createZodDto(
   restoreTeamVersionSchema,
+) {}
+
+/** The usage counters' brief — see {@link ToolUsageListSchema}. */
+export class ToolUsageListDto extends createZodDto(ToolUsageListSchema) {}
+
+/** One subject's usage and its split — see {@link ToolUsageSubjectSchema}. */
+export class ToolUsageSubjectDto extends createZodDto(ToolUsageSubjectSchema) {}
+
+/** Which subject `GET /v1/stats/tool-usage/subject` reads. */
+export class ToolUsageSubjectQueryDto extends createZodDto(
+  ToolUsageSubjectQuerySchema,
+) {}
+
+/** The per-call tool log's retention, pushed by the desktop app. */
+export class ToolUsageConfigDto extends createZodDto(ToolUsageConfigSchema) {}
+
+export class ToolUsageConfigAckDto extends createZodDto(
+  ToolUsageConfigAckSchema,
 ) {}
 
 /** The restored version and the file's new hash — see {@link TeamVersionRestoredSchema}. */

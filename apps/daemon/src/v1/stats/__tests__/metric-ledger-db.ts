@@ -15,15 +15,28 @@ import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { ProjectDao } from '../../projects/dao/project.dao';
+import { Project } from '../../projects/entity/project.entity';
 import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { AgentKind, ItemKind } from '../../runs/runs.types';
 import { MetricLedgerDao } from '../dao/metric-ledger.dao';
+import { UsageCounterDao } from '../dao/usage-counter.dao';
 import { ToolCallEvent } from '../entity/tool-call-event.entity';
 import { UsageActivity } from '../entity/usage-activity.entity';
+import { UsageCounter } from '../entity/usage-counter.entity';
+import { UsageCounterBackfill } from '../entity/usage-counter-backfill.entity';
+import { UsageSubject } from '../entity/usage-subject.entity';
 import { ThreadMetricsLedgerService } from '../services/thread-metrics-ledger.service';
+import { ToolCallLogRetentionService } from '../services/tool-call-log-retention.service';
+import { ToolUsageService } from '../services/tool-usage.service';
+import { UsageCounterService } from '../services/usage-counter.service';
+import { UsageCounterBackfillService } from '../services/usage-counter-backfill.service';
+import { UsageObserverService } from '../services/usage-observer.service';
+import { UsageRegistryService } from '../services/usage-registry.service';
+import { UsageRunFactsService } from '../services/usage-run-facts.service';
 
 /** Each CLI's own tool-name reading, as its adapter answers `toolCallMetric`. */
 const METRICS: Record<
@@ -41,7 +54,18 @@ export async function metricLedgerDb() {
     defineConfig({
       ...GENIRO_ORM_RUNTIME,
       dbName: ':memory:',
-      entities: [Run, Item, NodeState, Goal, ToolCallEvent, UsageActivity],
+      entities: [
+        Run,
+        Item,
+        NodeState,
+        Goal,
+        Project,
+        ToolCallEvent,
+        UsageActivity,
+        UsageCounter,
+        UsageSubject,
+        UsageCounterBackfill,
+      ],
       allowGlobalContext: true,
       namingStrategy: UnderscoreNamingStrategy,
       discovery: { checkDuplicateFieldNames: false },
@@ -65,15 +89,41 @@ export async function metricLedgerDb() {
       ),
   } as unknown as AgentAdapterRegistry;
   const ledger = new MetricLedgerDao(em);
+  const bus = new AgentEventBus();
+  const runDao = new RunDao(em);
+  const counterDao = new UsageCounterDao(em);
+  const facts = new UsageRunFactsService(em, bus, runDao, new NodeStateDao(em));
+  facts.onModuleInit();
+  const counters = new UsageCounterService(counterDao);
+  const registry = new UsageRegistryService(counterDao);
+  const backfill = new UsageCounterBackfillService(em, counterDao, runDao);
   const service = new ThreadMetricsLedgerService(
     em,
-    new AgentEventBus(),
-    new RunDao(em),
-    new NodeStateDao(em),
+    bus,
     new ItemDao(em),
     adapters,
     ledger,
+    facts,
+    counters,
+    backfill,
   );
+  const observer = new UsageObserverService(
+    em,
+    bus,
+    adapters,
+    facts,
+    counters,
+    registry,
+  );
+  const toolUsage = new ToolUsageService(
+    em,
+    counterDao,
+    counters,
+    registry,
+    backfill,
+    new ProjectDao(em),
+  );
+  const retention = new ToolCallLogRetentionService(counterDao, backfill);
   const seedRun = async (id: string, extra: Partial<Run> = {}) => {
     const fork = em.fork();
     fork.persist(
@@ -111,6 +161,7 @@ export async function metricLedgerDb() {
     at: string,
     memberId: string | null = null,
     inCall: string | null = null,
+    role: ItemWire['role'] = null,
   ): Promise<ItemWire> => {
     const seq = next++;
     const fork = em.fork();
@@ -118,7 +169,7 @@ export async function metricLedgerDb() {
       runId,
       seq,
       kind,
-      role: null,
+      role,
       memberId,
       payload: JSON.stringify(payload),
       createdAt: new Date(at),
@@ -131,7 +182,7 @@ export async function metricLedgerDb() {
       memberId,
       seq,
       kind,
-      role: null,
+      role,
       payload,
       createdAt: at,
       inCall,
@@ -144,10 +195,30 @@ export async function metricLedgerDb() {
     at: string,
     memberId: string | null = null,
     inCall: string | null = null,
+    role: ItemWire['role'] = null,
   ): Promise<ItemWire> => {
-    const item = await row(runId, kind, payload, at, memberId, inCall);
+    const item = await row(runId, kind, payload, at, memberId, inCall, role);
     await service.observe({ runId, item });
+    await observer.observe({ runId, item });
     return item;
   };
-  return { orm, em, ledger, service, seedRun, seedMember, row, feed };
+  return {
+    orm,
+    em,
+    bus,
+    ledger,
+    service,
+    counterDao,
+    counters,
+    registry,
+    backfill,
+    observer,
+    toolUsage,
+    retention,
+    runDao,
+    seedRun,
+    seedMember,
+    row,
+    feed,
+  };
 }

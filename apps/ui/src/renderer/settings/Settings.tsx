@@ -1582,6 +1582,7 @@ export function Settings({
               api={apis?.systemAnalyses ?? null}
               client={client}
               agentsApi={apis?.agents ?? null}
+              statsApi={apis?.stats ?? null}
               cliDetections={clis}
               capabilities={capabilities}
               capabilitiesLoading={capabilitiesLoading}

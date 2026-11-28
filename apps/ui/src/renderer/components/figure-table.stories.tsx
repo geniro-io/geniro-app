@@ -36,3 +36,19 @@ type Story = StoryObj<typeof meta>;
 export const Playground: Story = {};
 
 export const Empty: Story = { args: { rows: [] } };
+
+export const Sortable: Story = {
+  args: {
+    columns: [
+      { header: 'Tool', sortKey: 'name', cell: (row: Row) => row.name },
+      {
+        header: 'Calls',
+        align: 'end',
+        sortKey: 'calls',
+        cell: (row: Row) => row.calls,
+      },
+      { header: 'Avg time', align: 'end', cell: (row: Row) => row.avg },
+    ],
+    sort: { key: 'calls', onSort: () => undefined },
+  },
+};

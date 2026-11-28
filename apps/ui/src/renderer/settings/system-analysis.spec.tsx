@@ -200,6 +200,17 @@ function agentsApiStub(): DaemonApis['agents'] {
   ) as unknown as DaemonApis['agents'];
 }
 
+function statsApiStub(): DaemonApis['stats'] {
+  return {
+    readToolUsage: vi.fn(async () => ({
+      countingSince: null,
+      liveSince: null,
+      rows: [],
+      neverCalled: [],
+    })),
+  } as unknown as DaemonApis['stats'];
+}
+
 async function settle(ms = 0): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => {
@@ -217,6 +228,7 @@ async function renderPage(
         api={asApi(fakeApi())}
         client={null}
         agentsApi={agentsApiStub()}
+        statsApi={statsApiStub()}
         cliDetections={null}
         capabilities={null}
         capabilitiesLoading={false}
@@ -399,6 +411,7 @@ describe('SystemAnalysisPage', () => {
     const api = fakeApi(undefined, () => ({ analyses: rows, next: null }));
     const listeners = new Set<(event: SystemAnalysesChangedEvent) => void>();
     const client = {
+      onReconnect: () => () => undefined,
       onSystemAnalysesChanged: (
         listener: (event: SystemAnalysesChangedEvent) => void,
       ) => {

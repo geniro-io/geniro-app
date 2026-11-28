@@ -96,6 +96,8 @@ export interface McpCallContext extends McpListContext {
  * and extends the shared base, `BaseMcpTool`.
  */
 export interface McpTool {
+  /** Every name this entry can serve, whoever asks — what the usage counters register. */
+  names(): readonly string[];
   /** Whether a `tools/call` of this name is this entry's to answer. */
   handles(name: string): boolean;
   /** What this entry offers one asker right now — empty when nothing. */

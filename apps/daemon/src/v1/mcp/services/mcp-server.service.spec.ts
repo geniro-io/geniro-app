@@ -72,10 +72,12 @@ import {
   HOST_TEAM_NOTES_TOOL,
   HOST_UI_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
+  type UsageSignal,
 } from '../../agents/chat.types';
 import type { ChatSearchIndexDao } from '../../agents/dao/chat-search-index.dao';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import { ActionBroker } from '../../agents/services/action.broker';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AnalysisBroker } from '../../agents/services/analysis.broker';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
@@ -155,6 +157,7 @@ import { AgentKind } from '../../runs/runs.types';
 import type { ShareService } from '../../shares/services/share.service';
 import type { AgentShareOutcome } from '../../shares/shares.types';
 import type { TeamHistoryService } from '../../stats/services/team-history.service';
+import type { UsageRegistryService } from '../../stats/services/usage-registry.service';
 import type { SystemAnalysisHistoryService } from '../../system-analysis/services/system-analysis-history.service';
 import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
@@ -200,6 +203,12 @@ const NO_TOOL_FLAGS = {
   answered: () => undefined,
   threw: () => undefined,
 } as unknown as ToolFailureFlagsService;
+
+const NO_USAGE_BUS = new AgentEventBus();
+
+const NO_USAGE_REGISTRY = {
+  registerGeniroTools: async () => undefined,
+} as unknown as UsageRegistryService;
 
 /** One row of `tools/list`, as the description audit reads it. */
 type ToolListing = {
@@ -363,6 +372,8 @@ function service(
     },
     new HostToolResultLedger(),
     NO_TOOL_FLAGS,
+    NO_USAGE_BUS,
+    NO_USAGE_REGISTRY,
   );
 }
 
@@ -509,9 +520,13 @@ function stageService(
 /** A `flag_issue` broker no case here raises through: listing only. */
 function flagBroker(): FlagBroker {
   return new FlagBroker(
-    ...([{}, {}, {}, {}] as unknown as ConstructorParameters<
-      typeof FlagBroker
-    >),
+    ...([
+      {},
+      {},
+      {},
+      {},
+      new AgentEventBus(),
+    ] as unknown as ConstructorParameters<typeof FlagBroker>),
   );
 }
 
@@ -6728,6 +6743,8 @@ describe('goals through the MCP endpoint', () => {
       },
       new HostToolResultLedger(),
       NO_TOOL_FLAGS,
+      NO_USAGE_BUS,
+      NO_USAGE_REGISTRY,
     );
   });
 
@@ -6936,6 +6953,8 @@ describe('goals through the MCP endpoint', () => {
       { token: 'launch', version: '9.9.9', startedAt: 0, port: 4870 },
       new HostToolResultLedger(),
       NO_TOOL_FLAGS,
+      NO_USAGE_BUS,
+      NO_USAGE_REGISTRY,
     );
     const add = (member: string, text: string) =>
       callGoals(
@@ -7048,6 +7067,8 @@ describe('McpServerService — the in-app browser tools', () => {
         RUNTIME,
         new HostToolResultLedger(),
         NO_TOOL_FLAGS,
+        NO_USAGE_BUS,
+        NO_USAGE_REGISTRY,
       ),
       runs,
       saved,
@@ -7097,6 +7118,8 @@ describe('McpServerService — the in-app browser tools', () => {
           answered.push(result),
         threw: () => undefined,
       } as unknown as ToolFailureFlagsService,
+      NO_USAGE_BUS,
+      NO_USAGE_REGISTRY,
     );
 
     const answer = await callTool(subject, HOST_BROWSER_SNAPSHOT_TOOL, {
@@ -7426,6 +7449,7 @@ describe('McpServerService — results kept for a CLI that reports none', () => 
     isError: false,
   };
   const notes: McpTool = {
+    names: () => ['team_notes'],
     handles: (name) => name === 'team_notes',
     list: () => [],
     call: () => Promise.resolve(served),
@@ -7447,6 +7471,8 @@ describe('McpServerService — results kept for a CLI that reports none', () => 
       { token: 'launch', version: '9.9.9', startedAt: 0, port: 4870 },
       ledger,
       NO_TOOL_FLAGS,
+      NO_USAGE_BUS,
+      NO_USAGE_REGISTRY,
     );
     const callee = endpointOf('conv-9');
     const own = endpointOf(null);
@@ -7477,6 +7503,8 @@ describe('McpServerService — results kept for a CLI that reports none', () => 
       { token: 'launch', version: '9.9.9', startedAt: 0, port: 4870 },
       ledger,
       NO_TOOL_FLAGS,
+      NO_USAGE_BUS,
+      NO_USAGE_REGISTRY,
     );
     const own = endpointOf(null);
     ledger.watch(own);
@@ -7526,6 +7554,7 @@ describe('McpServerService — the daemon’s own flags for a tool’s failures'
     const target = new McpServerService(
       [
         {
+          names: () => ['browser_click'],
           handles: (name) => name === 'browser_click',
           list: () => [],
           call: () => Promise.resolve(timedOut),
@@ -7534,6 +7563,8 @@ describe('McpServerService — the daemon’s own flags for a tool’s failures'
       RUNTIME_INFO,
       new HostToolResultLedger(),
       flags,
+      NO_USAGE_BUS,
+      NO_USAGE_REGISTRY,
     );
 
     const response = await post(
@@ -7592,6 +7623,8 @@ describe('McpServerService — the daemon’s own flags for a tool’s failures'
       RUNTIME_INFO,
       new HostToolResultLedger(),
       flags,
+      NO_USAGE_BUS,
+      NO_USAGE_REGISTRY,
     );
 
     const artifact = await post(
@@ -7642,6 +7675,7 @@ describe('McpServerService — the daemon’s own flags for a tool’s failures'
     const target = new McpServerService(
       [
         {
+          names: () => ['show_ui'],
           handles: (name) => name === 'show_ui',
           list: () => [],
           call: () => Promise.reject(new Error('db is locked')),
@@ -7650,6 +7684,8 @@ describe('McpServerService — the daemon’s own flags for a tool’s failures'
       RUNTIME_INFO,
       new HostToolResultLedger(),
       flags,
+      NO_USAGE_BUS,
+      NO_USAGE_REGISTRY,
     );
 
     const response = await post(
@@ -7669,6 +7705,103 @@ describe('McpServerService — the daemon’s own flags for a tool’s failures'
         }),
         detail: new Error('db is locked'),
       },
+    ]);
+  });
+});
+
+describe('McpServerService — usage signals', () => {
+  const RUNTIME_INFO = {
+    token: 'launch',
+    version: '9.9.9',
+    startedAt: 0,
+    port: 4870,
+  };
+  const tool = (name: string, result: McpToolResult): McpTool => ({
+    names: () => [name],
+    handles: (asked) => asked === name,
+    list: () => [{ name, description: name, inputSchema: { type: 'object' } }],
+    call: () => Promise.resolve(result),
+  });
+  const ok = {
+    content: [{ type: 'text' as const, text: 'fine' }],
+    isError: false,
+  };
+  const refused = {
+    content: [{ type: 'text' as const, text: 'INVALID_ARGS' }],
+    isError: true,
+  };
+  const failed = {
+    content: [{ type: 'text' as const, text: 'boom' }],
+    isError: true,
+    failure: 'internal' as const,
+  };
+
+  function endpoint() {
+    const bus = new AgentEventBus();
+    const signals: UsageSignal[] = [];
+    bus.allUsageSignals().subscribe((signal) => signals.push(signal));
+    const registered: string[] = [];
+    const target = new McpServerService(
+      [
+        tool('goals', ok),
+        tool('memory_read', refused),
+        tool('memory_search', failed),
+      ],
+      RUNTIME_INFO,
+      new HostToolResultLedger(),
+      NO_TOOL_FLAGS,
+      bus,
+      {
+        registerGeniroTools: async (names: readonly string[]) => {
+          registered.push(...names);
+        },
+      } as unknown as UsageRegistryService,
+    );
+    return { target, signals, registered };
+  }
+
+  it('registers every name it can serve at boot', async () => {
+    const { target, registered } = endpoint();
+    await target.onModuleInit();
+    expect(registered).toEqual(['goals', 'memory_read', 'memory_search']);
+  });
+
+  it('publishes the names a tools/list served, for the session that asked', async () => {
+    const { target, signals } = endpoint();
+    await post(target, 'run-1', 'qa', rpc('tools/list', {}), 'conv-2');
+
+    expect(signals).toEqual([
+      {
+        kind: 'tools_offered',
+        runId: 'run-1',
+        memberId: 'qa',
+        conversationId: 'conv-2',
+        tools: ['goals', 'memory_read', 'memory_search'],
+      },
+    ]);
+  });
+
+  it("marks an error answer with no failure of geniro's own as refused, and a failure as failed", async () => {
+    const { target, signals } = endpoint();
+    for (const name of ['goals', 'memory_read', 'memory_search']) {
+      await post(
+        target,
+        'run-1',
+        'qa',
+        rpc('tools/call', { name, arguments: {} }),
+      );
+    }
+
+    expect(
+      signals.map((signal) =>
+        signal.kind === 'geniro_tool_answered'
+          ? [signal.tool, signal.outcome]
+          : null,
+      ),
+    ).toEqual([
+      ['goals', 'ok'],
+      ['memory_read', 'refused'],
+      ['memory_search', 'failed'],
     ]);
   });
 });

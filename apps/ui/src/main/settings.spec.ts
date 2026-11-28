@@ -287,6 +287,21 @@ describe('readSettings', () => {
     expect(settings.onboardingComplete).toBe(true);
   });
 
+  it('keeps the tool log 90 days by default, a stored choice or forever survives a read, and a bad one falls back', () => {
+    expect(readSettings().toolCallLogRetentionDays).toBe(90);
+
+    writeRaw({ toolCallLogRetentionDays: 365 });
+    expect(readSettings().toolCallLogRetentionDays).toBe(365);
+
+    writeRaw({ toolCallLogRetentionDays: null });
+    expect(readSettings().toolCallLogRetentionDays).toBeNull();
+
+    writeRaw({ toolCallLogRetentionDays: 0, onboardingComplete: true });
+    const settings = readSettings();
+    expect(settings.toolCallLogRetentionDays).toBe(90);
+    expect(settings.onboardingComplete).toBe(true);
+  });
+
   it('leaves the session limit automatic by default, and a stored limit survives a read', () => {
     expect(readSettings().keptSessionLimit).toBeNull();
 

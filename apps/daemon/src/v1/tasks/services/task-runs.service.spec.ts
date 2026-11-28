@@ -21,6 +21,7 @@ import {
 } from 'vitest';
 
 import { GENIRO_ORM_RUNTIME } from '../../../db/sqlite.driver';
+import type { UsageSignal } from '../../agents/chat.types';
 import { type RunWire } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -87,6 +88,10 @@ import { TasksService } from './tasks.service';
  * `<root>/<task uuid>`, which cannot exist for a freshly minted id.
  */
 const ATTACHMENTS_ROOT = join(tmpdir(), 'geniro-task-attachments-spec');
+
+const usageBus = new AgentEventBus();
+const usageSignals: UsageSignal[] = [];
+usageBus.allUsageSignals().subscribe((signal) => usageSignals.push(signal));
 
 describe('TaskRunsService (in-memory sqlite)', () => {
   let orm: MikroORM;
@@ -402,6 +407,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
           new AgentSessionRegistry(4),
         );
       })(),
+      usageBus,
       worktreesRoot,
     );
     // Asks by default, so a team card is unattended-incapable unless a test
@@ -642,6 +648,25 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       await service.start(task.id, { ...start(), startedBy: 'autopilot' });
 
       expect(startTeamRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('tells the usage counters who started the card: the autopilot, or a person', async () => {
+      teamApprovals = { 'dev-team': 'auto' };
+      const byAutopilot = await seedTeamCard();
+      const byUser = await seedTeamCard();
+      usageSignals.length = 0;
+
+      await service.start(byAutopilot.id, {
+        ...start(),
+        startedBy: 'autopilot',
+      });
+      await service.start(byUser.id, start());
+
+      expect(
+        usageSignals.map((signal) =>
+          signal.kind === 'capability' ? signal.capability : null,
+        ),
+      ).toEqual(['autopilot_card_start', 'card_start']);
     });
 
     it('reads the team as the card’s project runs it: an ask member overridden to auto there passes only there', async () => {
@@ -2096,7 +2121,17 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
 
     it("starts an agent thread in the project's folder, filed in the project group, owned by the project and not a card", async () => {
+      usageSignals.length = 0;
       const started = await service.startProjectRun(cardless());
+
+      expect(usageSignals).toEqual([
+        {
+          kind: 'capability',
+          runId: 'run-1',
+          capability: 'card_start',
+          ok: true,
+        },
+      ]);
 
       expect(started).toEqual({ runId: 'run-1' });
       expect(createChat).toHaveBeenCalledTimes(1);

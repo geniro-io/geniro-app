@@ -36,6 +36,7 @@ const listing = (name: string): McpToolListing => ({
 
 function innerTool(): McpTool & { call: ReturnType<typeof vi.fn> } {
   return {
+    names: () => OWN_NAMES,
     handles: vi.fn((name: string) => OWN_NAMES.includes(name)),
     list: vi.fn(() => OWN_NAMES.map(listing)),
     call: vi.fn(async () => ({ content: [], isError: false })),
@@ -47,6 +48,12 @@ const analysis = (hidden: boolean) => ({
 });
 
 describe('gatedForHiddenLessons', () => {
+  it('serves every name its inner tool serves', () => {
+    expect(gatedForHiddenLessons(innerTool(), analysis(true)).names()).toEqual(
+      OWN_NAMES,
+    );
+  });
+
   it('lists a hidden lessons chat only its lessons tools', () => {
     const gated = gatedForHiddenLessons(innerTool(), analysis(true));
 

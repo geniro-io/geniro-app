@@ -42,6 +42,21 @@ describe("wallMeasuredTurns — a team's members", () => {
     ]);
   });
 
+  it('measures work a callee does by itself inside its open call once, from its off-turn row', () => {
+    const first = settle(10_000, { callId: 'call-1' });
+    const stretch = settle(55_000, { callId: 'call-1' });
+    const rows = [
+      running(0, { callId: 'call-1' }),
+      first,
+      running(40_000, { callId: 'call-1', offTurn: true }),
+      stretch,
+    ];
+    expect(nodes(rows)).toEqual([
+      { seq: first.seq, memberId: 'a', ms: 10_000 },
+      { seq: stretch.seq, memberId: 'a', ms: 15_000 },
+    ]);
+  });
+
   it('subtracts the stretch an approval card parked the turn', () => {
     const end = settle(10_000);
     const rows = [

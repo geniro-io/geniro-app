@@ -1411,7 +1411,12 @@ export class TeamExecutorService
    */
   private readonly offTurnNodes = new Map<
     string,
-    { memberId: string; callId: string | null; restoreTo: NodeOutcome }
+    {
+      memberId: string;
+      callId: string | null;
+      /** Null for a stretch inside a call still open: the member stays running. */
+      restoreTo: NodeOutcome | null;
+    }
   >();
 
   /**
@@ -6345,6 +6350,25 @@ export class TeamExecutorService
       if (this.offTurnNodes.has(sessionKey)) {
         return;
       }
+      // Inside a call still open the member is `running` already, and the
+      // call's own ending is still owed: only the stretch is said.
+      if (
+        callId !== null &&
+        this.callBroker.callOpenBetweenTurns(runId, callId)
+      ) {
+        this.offTurnNodes.set(sessionKey, {
+          memberId,
+          callId,
+          restoreTo: null,
+        });
+        await persistItem(memberId, 'status', null, {
+          nodeId: memberId,
+          status: 'running',
+          callId,
+          offTurn: true,
+        });
+        return;
+      }
       const status = (await this.nodeStateDao.getByRunNode(runId, memberId, em))
         ?.status;
       // Only a member whose turn has ENDED has a badge to take — see
@@ -6384,12 +6408,29 @@ export class TeamExecutorService
      */
     const restoreOffTurnNodeBadge = async (
       sessionKey: string,
+      /** The stretch's own `turn_complete` was just written. */
+      endedByRow = false,
     ): Promise<void> => {
       const held = this.offTurnNodes.get(sessionKey);
       if (held === undefined) {
         return;
       }
       this.offTurnNodes.delete(sessionKey);
+      if (held.restoreTo === null) {
+        // A stretch with no `turn_complete` of its own (ACP late work, an
+        // error, the process closing, a wake starting) still ends as a turn
+        // does, so every clock closes it and `wall_turns` measures it; the
+        // call stays open.
+        if (!endedByRow) {
+          await persistItem(held.memberId, 'turn_complete', null, {
+            usage: null,
+            nodeId: held.memberId,
+            callId: held.callId,
+          });
+          await catchUpWallWork(held.memberId);
+        }
+        return;
+      }
       await this.nodeStateDao.setStatus(
         runId,
         held.memberId,
@@ -8207,7 +8248,10 @@ export class TeamExecutorService
           // goes back to whatever this stretch took it from.
           if (settles && ownsLivePlane) {
             offTurnBadgeAskedAt = 0;
-            await restoreOffTurnNodeBadge(sessionKey);
+            await restoreOffTurnNodeBadge(
+              sessionKey,
+              mapped.kind === 'turn_complete',
+            );
           }
         });
       };

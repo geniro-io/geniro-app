@@ -5105,6 +5105,20 @@ export function withLiveText(
   const drawnCallIds = new Set(
     collectCallBlocks(blocks).flatMap((block) => block.callIds),
   );
+  /**
+   * Calls whose card has settled with its callee not working in it. A live row
+   * under one of their keys describes nothing still happening: with no card to
+   * go into it lands at the end of the transcript, where its clock counts up
+   * for good.
+   */
+  const finishedLiveCalls = new Set(
+    collectCallBlocks(blocks)
+      .filter(
+        (block) =>
+          !OPEN_CALL_STATUSES.has(block.status) && !block.calleeWorking,
+      )
+      .flatMap((block) => block.callIds),
+  );
   const undrawnOpenCalls = new Set<string>();
   for (const [callId, callee] of daemonOpenCalls) {
     if (!drawnCallIds.has(callId)) {
@@ -5158,8 +5172,11 @@ export function withLiveText(
     if (state.text === '' && !thinking && composing === null) {
       continue;
     }
-    spokenFor.add(spokenKey(key));
     const keyCallId = callIdOfKey(key);
+    if (keyCallId !== null && finishedLiveCalls.has(keyCallId)) {
+      continue;
+    }
+    spokenFor.add(spokenKey(key));
     if (keyCallId !== null && undrawnOpenCalls.has(keyCallId)) {
       continue;
     }

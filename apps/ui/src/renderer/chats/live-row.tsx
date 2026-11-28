@@ -138,6 +138,39 @@ export function formatElapsed(ms: number): string {
 }
 
 /**
+ * How long a FINISHED stretch thought, from the daemon's `thoughtMs` on its
+ * reasoning row — the frozen counterpart of {@link ThinkingRow}'s clock. Draws
+ * nothing for a row that records no length or a thought under a second.
+ */
+export function ThoughtFor({
+  ms,
+}: {
+  ms: number | null;
+}): React.JSX.Element | null {
+  if (ms === null || ms < 1_000) {
+    return null;
+  }
+  return (
+    <div
+      data-slot="thought-for"
+      className="text-muted-foreground mt-1.5 text-xs not-italic">
+      Thought for {formatElapsed(ms)}
+    </div>
+  );
+}
+
+/** A reasoning row's recorded length, or null. */
+export function thoughtMsOf(payload: unknown): number | null {
+  if (payload && typeof payload === 'object' && 'thoughtMs' in payload) {
+    const value = payload.thoughtMs;
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+/**
  * One reasoning stretch: what the agent is thinking, or — where its CLI will
  * not say — how much that thinking has cost, and for how long either way.
  *

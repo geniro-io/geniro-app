@@ -27,7 +27,14 @@ import {
   errorReportText,
 } from './error-payload';
 import { isGeniroCardKind } from './geniro-tool';
-import { ComposingRow, liveRowKind, ThinkingRow, WorkingRow } from './live-row';
+import {
+  ComposingRow,
+  liveRowKind,
+  ThinkingRow,
+  ThoughtFor,
+  thoughtMsOf,
+  WorkingRow,
+} from './live-row';
 import { MarkdownContent, MESSAGE_TEXT_CLASS } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
@@ -361,6 +368,7 @@ export const TranscriptItem = memo(function TranscriptItem({
           ) : (
             <ReasoningHeadings headings={headings} />
           )}
+          <ThoughtFor ms={thoughtMsOf(item.payload)} />
         </MessageBubble>
       );
     }

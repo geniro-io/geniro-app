@@ -17488,6 +17488,211 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     await drain();
   });
 
+  it("closes a callee's off-turn thinking under its previous call when a continuation takes the conversation", async () => {
+    // The kept process woke by itself inside settled call-1 and began thinking
+    // under call-1's live key; call-2 continued the conversation a second
+    // later, so the rest of that stretch, its close and its durable row all
+    // went to call-2's key. Nothing closed call-1's, and every client joining
+    // the run was handed a thinking bubble whose clock ran for hours.
+    const { service, claude, callBroker, partials, deltas } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'launch the reviewers',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(callee, 'reviewers launched');
+    await call;
+    await drain();
+    const liveOf = (key: string) =>
+      partials.snapshot(run.id).find((event) => event.ownerKey === key);
+
+    callee.emitOffTurn({
+      type: 'reasoning_delta',
+      text: 'Both reviewers are back',
+    });
+    await drain();
+    expect(liveOf('callee::call-1')?.thinkingStretch).not.toBeNull();
+
+    // One still in flight as the continuation starts leaves nothing open either.
+    callee.emitOffTurn({ type: 'reasoning_delta', text: ', both agree' });
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'more',
+      agent: 'callee',
+      message: 'fold their findings in',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    await drain();
+
+    expect(liveOf('callee::call-1')?.thinkingStretch ?? null).toBeNull();
+    expect(
+      deltas.filter((delta) => delta.ownerKey === 'callee::call-1').at(-1),
+    ).toMatchObject({ thinkingStretch: null, thinkingSince: null, text: '' });
+
+    // What the process writes from here on is the new call's.
+    callee.emitOffTurn({ type: 'reasoning_delta', text: 'Folding them in' });
+    await drain();
+    expect(liveOf('callee::call-1')?.thinkingStretch ?? null).toBeNull();
+    expect(liveOf('callee::call-2')?.thinkingText).toBe('Folding them in');
+
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'done');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('stamps how long a callee thought on the reasoning row its stretch became', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'think about it',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(1_000_000);
+      callee.emit({ type: 'reasoning_delta', text: 'Weighing the options' });
+      await drain();
+      now.mockReturnValue(1_012_000);
+      callee.emit({ type: 'reasoning', text: 'Weighing the options' });
+      callee.emit({ type: 'text', text: 'decided' });
+      await drain();
+    } finally {
+      now.mockRestore();
+    }
+    const rowOf = (kind: string) =>
+      itemDao.items
+        .filter((item) => item.kind === kind && item.memberId === 'callee')
+        .map((item) => JSON.parse(item.payload) as { thoughtMs?: number });
+    expect(rowOf('reasoning')).toEqual([
+      expect.objectContaining({ thoughtMs: 12_000 }),
+    ]);
+    expect(rowOf('message').every((row) => row.thoughtMs === undefined)).toBe(
+      true,
+    );
+
+    completeTurn(callee, 'decided');
+    await call;
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('stamps how long a callee thought by itself after its call settled', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'launch the reviewers',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'reviewers launched');
+    await call;
+    await drain();
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(5_000_000);
+      callee.emitOffTurn({ type: 'reasoning_delta', text: 'They are back' });
+      await drain();
+      now.mockReturnValue(5_009_000);
+      callee.emitOffTurn({ type: 'reasoning', text: 'They are back' });
+      await drain();
+    } finally {
+      now.mockRestore();
+    }
+
+    const reasoning = itemDao.items.filter(
+      (item) => item.kind === 'reasoning' && item.memberId === 'callee',
+    );
+    expect(
+      reasoning.map(
+        (item) => JSON.parse(item.payload) as Record<string, unknown>,
+      ),
+    ).toEqual([
+      expect.objectContaining({ thoughtMs: 9_000, callId: 'call-1' }),
+    ]);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it("closes a callee's off-turn thinking under its call when a LATER pass continues the conversation", async () => {
+    const { service, claude, callBroker, partials, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'launch the reviewers',
+    });
+    await drain();
+    claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(claude.starts[1]!, 'reviewers launched');
+    await call;
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    claude.starts[1]!.emitOffTurn({
+      type: 'reasoning_delta',
+      text: 'Both reviewers are back',
+    });
+    await drain();
+    const liveOf = (key: string) =>
+      partials.snapshot(run.id).find((event) => event.ownerKey === key);
+    expect(liveOf('callee::call-1')?.thinkingStretch).not.toBeNull();
+
+    await service.sendMessage(run.id, 'fold the findings in');
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'fold',
+      agent: 'callee',
+      message: 'fold their findings in',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    await drain();
+
+    expect(liveOf('callee::call-1')?.thinkingStretch ?? null).toBeNull();
+
+    for (const turn of claude.starts) {
+      if (!turn.settled) {
+        completeTurn(turn, 'done');
+      }
+    }
+    await drain();
+  });
+
   it('ends a held off-turn stretch when a LATER pass continues the conversation', async () => {
     // The stretch is remembered by the run, not by the pass that saw it open:
     // a user message starts a new pass, and that pass's continuation is the

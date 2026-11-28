@@ -719,6 +719,148 @@ describe('PartialStreamService — a settled turn stops claiming to be live', ()
   });
 });
 
+describe('PartialStreamService — how long a stretch thought, for its row', () => {
+  const at = (iso: string): void => {
+    vi.setSystemTime(new Date(iso));
+  };
+
+  it('hands the closed stretch its length once, to the reasoning row it became', () => {
+    vi.useFakeTimers();
+    try {
+      at('2026-07-29T00:00:00Z');
+      service.reasoning(RUN, OWNER, null, 'Weighing it');
+      at('2026-07-29T00:00:12Z');
+      service.endThinking(RUN, OWNER, null);
+
+      // A report about work beside the agent leaves the claim waiting.
+      expect(service.thoughtFields(RUN, OWNER, 'tool_result', false)).toEqual(
+        {},
+      );
+      expect(service.thoughtFields(RUN, OWNER, 'reasoning', true)).toEqual({
+        thoughtMs: 12_000,
+      });
+      expect(service.thoughtFields(RUN, OWNER, 'reasoning', true)).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the length when words closed the stretch before its row landed', () => {
+    vi.useFakeTimers();
+    try {
+      at('2026-07-29T00:00:00Z');
+      service.thinking(RUN, OWNER, null, 40);
+      at('2026-07-29T00:00:05Z');
+      service.append(RUN, OWNER, null, 'So the answer is');
+      at('2026-07-29T00:00:06Z');
+      service.endThinking(RUN, OWNER, null);
+
+      expect(service.thoughtFields(RUN, OWNER, 'reasoning', true)).toEqual({
+        thoughtMs: 5_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('spends the claim on any other row of the agent’s own', () => {
+    vi.useFakeTimers();
+    try {
+      at('2026-07-29T00:00:00Z');
+      service.thinking(RUN, OWNER, null, 40);
+      at('2026-07-29T00:00:05Z');
+      service.endThinking(RUN, OWNER, null);
+
+      expect(service.thoughtFields(RUN, OWNER, 'tool_call', true)).toEqual({});
+      expect(service.thoughtFields(RUN, OWNER, 'reasoning', true)).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts a turn with nothing to claim', () => {
+    vi.useFakeTimers();
+    try {
+      at('2026-07-29T00:00:00Z');
+      service.thinking(RUN, OWNER, null, 40);
+      at('2026-07-29T00:00:05Z');
+      service.endThinking(RUN, OWNER, null);
+      service.startTurn(RUN, OWNER);
+
+      expect(service.thoughtFields(RUN, OWNER, 'reasoning', true)).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops an unclaimed length once the next stretch opens', () => {
+    vi.useFakeTimers();
+    try {
+      at('2026-07-29T00:00:00Z');
+      service.thinking(RUN, OWNER, null, 40);
+      at('2026-07-29T00:00:05Z');
+      service.endThinking(RUN, OWNER, null);
+      service.thinking(RUN, OWNER, null, 10);
+
+      expect(service.thoughtFields(RUN, OWNER, 'reasoning', true)).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('has nothing to hand a row this plane never saw think', () => {
+    expect(service.thoughtFields(RUN, OWNER, 'reasoning', true)).toEqual({});
+  });
+});
+
+describe('PartialStreamService — a conversation has ONE live tail', () => {
+  it('answers the key a conversation moved off, and nothing for the same key', () => {
+    expect(service.moveConversation(RUN, 'conv', 'qa::call-1')).toBeNull();
+    expect(service.moveConversation(RUN, 'conv', 'qa::call-1')).toBeNull();
+    expect(service.moveConversation(RUN, 'conv', 'qa::call-2')).toBe(
+      'qa::call-1',
+    );
+    expect(service.moveConversation(RUN, 'other', 'qa::call-3')).toBeNull();
+  });
+
+  it("forgets where a deleted run's conversations were", () => {
+    service.moveConversation(RUN, 'conv', 'qa::call-1');
+    service.forgetRun(RUN);
+
+    expect(service.moveConversation(RUN, 'conv', 'qa::call-2')).toBeNull();
+  });
+
+  it('closes one owner for live clients and late joiners, leaving the others', () => {
+    service.reasoning(RUN, 'qa::call-1', 'qa', 'Both reviewers are back');
+    service.cost(RUN, 'qa::call-1', 'qa', 0.4);
+    service.append(RUN, 'engineer', 'engineer', 'building');
+
+    service.closeOwner(RUN, 'qa::call-1', 'qa');
+
+    expect(last()).toMatchObject({
+      ownerKey: 'qa::call-1',
+      memberId: 'qa',
+      text: '',
+      thinkingText: null,
+      thinkingStretch: null,
+      thinkingSince: null,
+      spentCostUsd: null,
+    });
+    expect(service.snapshot(RUN).map((event) => event.ownerKey)).toEqual([
+      'engineer',
+    ]);
+    expect(spendStore.runs.get(RUN)?.has('qa::call-1') ?? false).toBe(false);
+  });
+
+  it('publishes nothing for an owner that holds nothing', () => {
+    const before = published.length;
+
+    service.closeOwner(RUN, 'qa::call-1', 'qa');
+
+    expect(published).toHaveLength(before);
+  });
+});
+
 describe('PartialStreamService — a client joining late is owed the plane', () => {
   it('answers each owner of the run with the event it last published', () => {
     service.cost(RUN, OWNER, null, 0.75);

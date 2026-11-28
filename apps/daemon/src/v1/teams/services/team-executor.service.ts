@@ -7735,6 +7735,12 @@ export class TeamExecutorService
             try {
               await persistItem(node.id, mapped.kind, mapped.role, {
                 ...mapped.payload,
+                ...this.partials.thoughtFields(
+                  runId,
+                  ownerKey,
+                  mapped.kind,
+                  endsReasoningStretch(event),
+                ),
                 // A card row carries the CARD id, which is what the renderer
                 // sends back as the verdict's `requestId`.
                 ...(cardId !== null ? { id: cardId } : {}),
@@ -8152,6 +8158,14 @@ export class TeamExecutorService
           }
           await persistItem(node.id, mapped.kind, mapped.role, {
             ...mapped.payload,
+            ...(ownsLivePlane
+              ? this.partials.thoughtFields(
+                  runId,
+                  ownerKey,
+                  mapped.kind,
+                  endsReasoningStretch(event),
+                )
+              : {}),
             nodeId: node.id,
             ...(callId ? { callId } : {}),
             ...usageOwner(mapped.kind),
@@ -8272,6 +8286,20 @@ export class TeamExecutorService
       // "2 active · 2 threads" above it. The published nodeId stays the member's,
       // so a client can still attribute the reading.
       const ownerKey = partialOwnerKey(node.id, callContext?.callId ?? null);
+      // One conversation, one live tail. A continuation can arrive while the
+      // kept process is still writing an off-turn stretch under the previous
+      // call's key; that key is closed on the write chain, behind the events
+      // its sink already queued, or its stretch would stay open for good.
+      const supersededOwner = this.partials.moveConversation(
+        runId,
+        sessionKey,
+        ownerKey,
+      );
+      if (supersededOwner !== null) {
+        enqueue(() => {
+          this.partials.closeOwner(runId, supersededOwner, node.id);
+        });
+      }
       // The turn's spend starts from nothing, as a chat turn's does — and
       // BEFORE the turn can emit a reading: a member's own key is reused by
       // every pass, and a figure a previous process left on it (persisted

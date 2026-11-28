@@ -4489,6 +4489,73 @@ describe('withLiveText', () => {
     });
   });
 
+  describe('a live key its conversation has finished with', () => {
+    const call = (callId: string, extra: Record<string, unknown> = {}) =>
+      item(
+        'call_started',
+        { callId, calleeNodeId: 'researcher', message: 'look', ...extra },
+        'orch',
+      );
+    const callee = (
+      kind: ChatItem['kind'],
+      payload: Record<string, unknown>,
+      callId: string,
+    ): ChatItem =>
+      item(kind, { ...payload, callId, nodeId: 'researcher' }, 'researcher');
+    const thinkingIn = (key: string) =>
+      [
+        key,
+        live({ thinkingStretch: 1, thinkingText: `thinking under ${key}` }),
+      ] as const;
+    const liveRows = (entries: readonly TranscriptEntry[]): string[] =>
+      entries.flatMap((entry): string[] => {
+        if (entry.type === 'item') {
+          return liveRowKind(entry.item.payload) === null
+            ? []
+            : [entry.item.id];
+        }
+        return 'entries' in entry ? liveRows(entry.entries) : [];
+      });
+
+    it('draws nothing for a call whose card settled with its callee idle', () => {
+      // The thinking bubble that counted to 2h 46m at the end of the
+      // transcript: its stretch was never closed under this call's key.
+      const blocks = buildTurnBlocks(
+        groupTranscript([
+          call('call-2'),
+          callee('status', { status: 'running' }, 'call-2'),
+          callee('message', { text: 'Both reviewers are back.' }, 'call-2'),
+          callee('status', { status: 'completed' }, 'call-2'),
+        ]),
+      );
+
+      const entries = withLiveText(
+        blocks,
+        new Map([thinkingIn('researcher::call-2')]),
+      );
+
+      expect(liveRows(entries)).toEqual([]);
+    });
+
+    it('still draws a callee carrying on by itself in its settled call', () => {
+      const blocks = buildTurnBlocks(
+        groupTranscript([
+          call('call-2'),
+          callee('status', { status: 'running' }, 'call-2'),
+          callee('status', { status: 'completed' }, 'call-2'),
+          callee('status', { status: 'running', offTurn: true }, 'call-2'),
+        ]),
+      );
+
+      const entries = withLiveText(
+        blocks,
+        new Map([thinkingIn('researcher::call-2')]),
+      );
+
+      expect(liveRows(entries)).toHaveLength(1);
+    });
+  });
+
   it('draws NO working row for a callee the open call already narrates', () => {
     // The reported bug: an all-but-empty `Engineer · Working… 2s` block at the
     // root of the transcript, beside the call block that had just said

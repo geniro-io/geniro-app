@@ -1402,6 +1402,42 @@ describe('TranscriptItem — a finished reasoning row', () => {
     expect(container.textContent).toContain(summary);
     expect(container.querySelector('[aria-expanded]')).toBeNull();
   });
+
+  it('says how long the agent thought, in the live clock’s format', () => {
+    render(
+      <TranscriptItem
+        item={item('reasoning', { text: 'Weighing it', thoughtMs: 72_400 })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(
+      container.querySelector('[data-slot="thought-for"]')?.textContent,
+    ).toBe('Thought for 1m 12s');
+  });
+
+  it('says no duration for a thought under a second', () => {
+    render(
+      <TranscriptItem
+        item={item('reasoning', { text: 'Weighing it', thoughtMs: 400 })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.querySelector('[data-slot="thought-for"]')).toBeNull();
+  });
+
+  it('says no duration on a row that carries none', () => {
+    render(
+      <TranscriptItem
+        item={item('reasoning', { text: 'Weighing it' })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.querySelector('[data-slot="thought-for"]')).toBeNull();
+    expect(container.textContent).not.toContain('Thought for');
+  });
 });
 
 describe('TranscriptItem — a message a Stop dropped', () => {

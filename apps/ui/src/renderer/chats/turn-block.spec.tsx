@@ -565,10 +565,10 @@ describe('a card entry reaches EntryCard from BOTH flows', () => {
 });
 
 describe('TurnBlock reasoning', () => {
-  function renderReasoning(text: string): void {
+  function renderReasoning(text: string, extra: object = {}): void {
     const entries = buildTurnBlocks(
       groupTranscript([
-        item('reasoning', { text }, 'writer'),
+        item('reasoning', { text, ...extra }, 'writer'),
         item('message', { text: 'Done.' }, 'writer', 'assistant'),
       ]),
     );
@@ -597,6 +597,56 @@ describe('TurnBlock reasoning', () => {
       'Evaluating Sheet event guards',
     ]);
     expect(row!.querySelector('strong')).toBeNull();
+  });
+
+  it('says how long a finished thought took, under its text', () => {
+    renderReasoning('Weighing the two fixes before touching the daemon.', {
+      thoughtMs: 12_400,
+    });
+
+    const row = container.querySelector('[data-role="reasoning"]');
+    expect(row?.querySelector('[data-slot="thought-for"]')?.textContent).toBe(
+      'Thought for 12s',
+    );
+  });
+
+  it('says no duration for a thought that recorded none', () => {
+    renderReasoning('Weighing the two fixes before touching the daemon.');
+
+    expect(container.querySelector('[data-slot="thought-for"]')).toBeNull();
+  });
+
+  it('sums the recorded thinking of a folded run of steps', () => {
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'Stand is up.' }, 'writer', 'assistant'),
+        item(
+          'reasoning',
+          { text: '**Updating handoff pointer**', thoughtMs: 3_000 },
+          'writer',
+        ),
+        item('reasoning', { text: '**Reviewing test logs**' }, 'writer'),
+        item(
+          'reasoning',
+          { text: '**Recording keeper need**', thoughtMs: 64_500 },
+          'writer',
+        ),
+        item('message', { text: 'Done.' }, 'writer', 'assistant'),
+      ]),
+    );
+    act(() => {
+      root.render(
+        <>
+          {entries.map((entry, index) => (
+            <TranscriptEntryView key={index} entry={entry} nodes={NODES} />
+          ))}
+        </>,
+      );
+    });
+
+    expect(
+      container.querySelector('[data-slot="thought-for"]')?.textContent,
+    ).toBe('Thought for 1m 7s');
   });
 
   it('folds back-to-back summaries into one Thought line that opens on every heading', () => {

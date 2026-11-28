@@ -432,7 +432,7 @@ const ManagerNode = memo(function ManagerNode({
                     ? 'bg-primary/15 text-primary'
                     : 'bg-muted text-foreground/80',
                 )}>
-                {started && manager.working ? <Spinner pace="stepped" /> : null}
+                {started && manager.working ? <Spinner pace="frames" /> : null}
                 {state}
               </span>
             </span>

@@ -1,4 +1,4 @@
-import { Loader, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 import { cn } from './utils';
 
@@ -11,11 +11,12 @@ import { cn } from './utils';
  * `renderer-components.md` forbids — a change to the size or the tone would
  * have had to be made four times and could silently drift between them.
  *
- * `stepped` turns a spoked wheel eight steps a second instead of a smooth arc,
- * for a surface showing many at once: a smooth spin repaints on every display
- * frame. It turns a span around the glyph, because Chromium runs an animation
- * on an SVG element on the main thread, restyling the page every frame. It
- * stands still when the system asks for less motion, as the canvas does.
+ * `frames` draws the same arc from an animated picture (`spinner-frames` in
+ * `styles/global.css`), for a surface showing many at once: a CSS spin, smooth
+ * or in steps, repaints the page around every spinner on each frame it moves,
+ * while one picture's frames advance for every copy together. The picture is a
+ * mask over `currentColor`, so the tone still comes from the theme. It shows the
+ * still arc when the system asks for less motion.
  *
  * Always `aria-hidden`: it decorates a row that already says in words what is
  * happening, so announcing it again would only interrupt a screen reader.
@@ -25,18 +26,18 @@ export function Spinner({
   pace = 'smooth',
 }: {
   className?: string;
-  pace?: 'smooth' | 'stepped';
+  pace?: 'smooth' | 'frames';
 }): React.JSX.Element {
-  if (pace === 'stepped') {
+  if (pace === 'frames') {
     return (
       <span
         aria-hidden="true"
         data-slot="spinner"
         className={cn(
-          'inline-flex size-3 shrink-0 animate-spin spinner-stepped text-primary motion-reduce:animate-none',
+          'inline-flex size-3 shrink-0 spinner-frames text-primary',
           className,
         )}>
-        <Loader className="size-full" />
+        <Loader2 className="size-full" />
       </span>
     );
   }

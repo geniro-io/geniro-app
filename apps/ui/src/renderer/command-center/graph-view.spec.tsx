@@ -412,7 +412,7 @@ describe('GraphView', () => {
     ).toBe('Working');
     expect(
       manager.querySelector(
-        '[data-slot="graph-manager-state"] [data-slot="spinner"].spinner-stepped',
+        '[data-slot="graph-manager-state"] [data-slot="spinner"].spinner-frames',
       ),
     ).not.toBeNull();
     expect(manager.className).not.toContain('cc-breathe');

@@ -8,7 +8,11 @@ import {
   REMOTE_VIA_HEADER,
   REMOTE_VIA_VALUE,
 } from '../../../auth/remote-marker';
-import { startThreadRunSchema } from '../dto/command-center.dto';
+import { NOTICE_ITEMS_MAX } from '../command-center.types';
+import {
+  SettingsNoticeReadingsDto,
+  startThreadRunSchema,
+} from '../dto/command-center.dto';
 import { CommandCenterController } from './command-center.controller';
 
 const START_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -70,6 +74,45 @@ describe('CommandCenterController', () => {
       });
 
       expect(parsed).toEqual({ startSha: START_SHA, startDirty: false });
+    });
+  });
+
+  describe('the Settings notices', () => {
+    it('takes readings from the desktop only, and refuses a paired device', () => {
+      expect(guardsOf('reportNoticeReadings')).toContain(DesktopOnlyGuard);
+      expect(() =>
+        passesGuards('reportNoticeReadings', {
+          [REMOTE_VIA_HEADER]: REMOTE_VIA_VALUE,
+        }),
+      ).toThrow(ForbiddenException);
+    });
+
+    it('lets any device read and dismiss them, and dismiss a Done card', () => {
+      expect(guardsOf('listNotices')).toEqual([]);
+      expect(guardsOf('dismissNotice')).toEqual([]);
+      expect(guardsOf('dismissDone')).toEqual([]);
+    });
+
+    it('refuses a reading with more items than a notice holds, or a kind the daemon reads itself', () => {
+      const schema = SettingsNoticeReadingsDto.schema;
+      expect(
+        schema.safeParse({
+          readings: [
+            {
+              kind: 'agent-updates',
+              items: Array.from(
+                { length: NOTICE_ITEMS_MAX + 1 },
+                (_, index) => `cli${index}@1`,
+              ),
+            },
+          ],
+        }).success,
+      ).toBe(false);
+      expect(
+        schema.safeParse({
+          readings: [{ kind: 'memory-conflicts', items: ['f1'] }],
+        }).success,
+      ).toBe(false);
     });
   });
 

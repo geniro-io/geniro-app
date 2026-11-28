@@ -2,14 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import type { ConfigProfile } from '../../shared/contracts';
 import {
+  detection,
+  updateAvailable,
   updateState,
   waitingShare,
 } from '../__tests__/settings-attention-fixtures';
 import {
   appUpdateWaits,
   configDirName,
-  dismissFlagKey,
-  isFolded,
+  reportedNoticeReadings,
+  shareWaitOf,
   shareWaitsByPlace,
 } from './settings-attention';
 
@@ -83,61 +85,90 @@ describe('configDirName', () => {
   });
 });
 
-describe('dismissFlagKey', () => {
-  it('keys a dismissal by its card and its item', () => {
-    expect(dismissFlagKey('app-update', '2.4.0')).toBe(
-      'settings-attention-dismissed:app-update:2.4.0',
-    );
+describe('reportedNoticeReadings', () => {
+  it('leaves out what Electron main has not read yet', () => {
+    expect(reportedNoticeReadings(null, null)).toEqual([]);
+  });
+
+  it('names the Geniro version, each CLI update and each signed-out account as the notices key them', () => {
+    expect(
+      reportedNoticeReadings(
+        [
+          detection('claude', { update: updateAvailable('2.0.0') }),
+          detection('codex', {
+            loggedIn: false,
+            profileLogins: { '/cfg/work': false },
+          }),
+        ],
+        updateState({ phase: 'available', version: '2.4.0' }),
+      ),
+    ).toEqual([
+      { kind: 'app-update', items: ['2.4.0'], unsettled: [] },
+      { kind: 'agent-updates', items: ['claude@2.0.0'], unsettled: ['codex@'] },
+      {
+        kind: 'agent-sign-in',
+        items: ['codex:', 'codex:/cfg/work'],
+        unsettled: [],
+      },
+    ]);
+  });
+
+  it('reports what is not known right now as unsettled, never as nothing waiting', () => {
+    for (const phase of ['idle', 'checking', 'error'] as const) {
+      expect(
+        reportedNoticeReadings(null, updateState({ phase, version: null }))[0],
+      ).toEqual({ kind: 'app-update', items: [], unsettled: ['unknown'] });
+    }
+    expect(
+      reportedNoticeReadings(
+        [
+          detection('claude', {
+            loggedIn: null,
+            profileLogins: { '/cfg/work': null, '/cfg/home': false },
+          }),
+          detection('codex', { found: false, loggedIn: null }),
+        ],
+        null,
+      ),
+    ).toEqual([
+      { kind: 'agent-updates', items: [], unsettled: ['claude@'] },
+      {
+        kind: 'agent-sign-in',
+        items: ['claude:/cfg/home'],
+        unsettled: ['claude:', 'claude:/cfg/work'],
+      },
+    ]);
+  });
+
+  it('reports a kind it read with nothing waiting as empty, so its notice closes', () => {
+    expect(
+      reportedNoticeReadings(
+        [
+          detection('claude', {
+            update: {
+              available: false,
+              latestVersion: null,
+              checkUnavailableReason: null,
+            },
+          }),
+        ],
+        updateState({ phase: 'up-to-date' }),
+      ),
+    ).toEqual([
+      { kind: 'app-update', items: [], unsettled: [] },
+      { kind: 'agent-updates', items: [], unsettled: [] },
+      { kind: 'agent-sign-in', items: [], unsettled: [] },
+    ]);
   });
 });
 
-describe('isFolded', () => {
-  const card = 'agent-updates';
-  const flagged = (flags: Record<string, boolean>) => (key: string) =>
-    flags[key] ?? null;
-  const key = (item: string) => dismissFlagKey(card, item);
-
-  it('never folds a card that shows nothing', () => {
-    expect(isFolded(card, [], flagged({}))).toBe(false);
-  });
-
-  it('folds once every item it shows was dismissed', () => {
-    expect(
-      isFolded(
-        card,
-        ['a', 'b'],
-        flagged({ [key('a')]: true, [key('b')]: true }),
-      ),
-    ).toBe(true);
-  });
-
-  it('opens for an item that was never dismissed', () => {
-    expect(
-      isFolded(
-        card,
-        ['a', 'b', 'c'],
-        flagged({ [key('a')]: true, [key('b')]: true }),
-      ),
-    ).toBe(false);
-  });
-
-  it('stays folded when a dismissed item goes away', () => {
-    expect(
-      isFolded(card, ['a'], flagged({ [key('a')]: true, [key('b')]: true })),
-    ).toBe(true);
-  });
-
-  it('opens again once its items were shown again', () => {
-    expect(isFolded(card, ['a'], flagged({ [key('a')]: false }))).toBe(false);
-  });
-
-  it('reads a dismissal of another card as not dismissed here', () => {
-    expect(
-      isFolded(
-        card,
-        ['a'],
-        flagged({ [dismissFlagKey('app-update', 'a')]: true }),
-      ),
-    ).toBe(false);
+describe('shareWaitOf', () => {
+  it('finds the place a share-sign-in notice is keyed by', () => {
+    const waits = shareWaitsByPlace([
+      waitingShare('s1', 'gcs', 'Google Cloud'),
+      waitingShare('s2', 'aws', 'Amazon S3'),
+    ]);
+    expect(shareWaitOf(waits, 'share-sign-in:gcs')?.label).toBe('Google Cloud');
+    expect(shareWaitOf(waits, 'share-sign-in:azure')).toBeNull();
   });
 });

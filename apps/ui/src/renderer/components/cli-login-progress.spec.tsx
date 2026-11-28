@@ -50,6 +50,38 @@ function byText(text: string): HTMLButtonElement | undefined {
 const noop = { onSubmitCode: vi.fn(), onCancel: vi.fn(), onDismiss: vi.fn() };
 
 describe('CliLoginProgress', () => {
+  it('cuts its headline among rows so Open, Copy and Cancel stay on a narrow card', () => {
+    render(
+      <CliLoginProgress
+        session={session({ url: 'https://x.test/a' })}
+        error={null}
+        variant="inline"
+        {...noop}
+      />,
+    );
+    const inline = container.querySelector(
+      '[data-slot="cli-login-progress-title"]',
+    );
+    expect(inline?.classList.contains('truncate')).toBe(true);
+    expect(inline?.classList.contains('min-w-0')).toBe(true);
+    expect(inline?.getAttribute('title')).toBe(
+      'Waiting for you to finish in the browser…',
+    );
+
+    render(
+      <CliLoginProgress
+        session={session({ url: 'https://x.test/a' })}
+        error={null}
+        {...noop}
+      />,
+    );
+    const band = container.querySelector(
+      '[data-slot="cli-login-progress-title"]',
+    );
+    expect(band?.classList.contains('whitespace-nowrap')).toBe(true);
+    expect(band?.classList.contains('truncate')).toBe(false);
+  });
+
   it('shows no code field while the CLI is only waiting on the browser', () => {
     // cursor's whole flow, and claude's first seconds. A field here would be a
     // dead input in front of a CLI that wants nothing.

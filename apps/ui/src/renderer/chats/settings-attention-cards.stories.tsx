@@ -5,7 +5,6 @@ import type { DaemonApis } from '../daemon-api';
 import type { CliUpdatesController } from '../settings/use-cli-updates';
 import type { UpdateController } from '../updates/use-update-state';
 import type { CliLoginController } from '../use-cli-login';
-import { dismissFlagKey } from './settings-attention';
 import {
   AgentSignInCard,
   AgentUpdatesCard,
@@ -13,11 +12,9 @@ import {
   MemoryConflictsCard,
   ShareSignInCard,
 } from './settings-attention-cards';
-import { ThreadUiMemoryContext, writeThreadFlag } from './thread-ui-memory';
 
 const noop = (): void => undefined;
 const resolved = (): Promise<void> => Promise.resolve();
-const STORY_RUN = 'story-run';
 const FINDING_IDS = ['f1', 'f2', 'f3', 'f4'];
 
 function detection(kind: CliDetection['kind'], latest: string): CliDetection {
@@ -95,6 +92,7 @@ export const AgentUpdates: Story = {
       rows={[detection('claude', '1.5.0'), detection('codex', '0.31.0')]}
       updates={UPDATES}
       nameOf={nameOf}
+      onDismiss={noop}
     />
   ),
 };
@@ -121,9 +119,47 @@ export const AgentSignIn: Story = {
   ),
 };
 
+export const AgentSigningIn: Story = {
+  render: () => (
+    <AgentSignInCard
+      rows={[]}
+      login={
+        {
+          ...LOGIN,
+          login: {
+            kind: 'claude',
+            server: null,
+            configDir: '/Users/me/.claude-work',
+            session: {
+              id: 'login-1',
+              status: 'waiting',
+              url: 'https://example.test/sign-in',
+              message: null,
+            },
+          },
+        } as unknown as CliLoginController
+      }
+      nameOf={nameOf}
+      profiles={[
+        {
+          id: 'work',
+          name: 'Work account',
+          agent: 'claude',
+          dir: '/Users/me/.claude-work',
+          color: 'blue',
+        },
+      ]}
+    />
+  ),
+};
+
 export const GeniroUpdateAvailable: Story = {
   render: () => (
-    <AppUpdateCard update={appUpdate('available')} remote={false} />
+    <AppUpdateCard
+      update={appUpdate('available')}
+      remote={false}
+      onDismiss={noop}
+    />
   ),
 };
 
@@ -146,23 +182,35 @@ export const SharesWaitingForSignIn: Story = {
         shareIds: ['s1', 's2', 's3'],
       }}
       api={{} as DaemonApis['shares']}
+      remote={false}
+      onDismiss={noop}
+    />
+  ),
+};
+
+export const SharesWaitingOnPhone: Story = {
+  render: () => (
+    <ShareSignInCard
+      wait={{
+        destinationId: 'gcs',
+        label: 'Google Cloud',
+        reason: null,
+        count: 3,
+        shareIds: ['s1', 's2', 's3'],
+      }}
+      api={{} as DaemonApis['shares']}
+      remote
+      onDismiss={noop}
     />
   ),
 };
 
 export const MemoryConflicts: Story = {
-  render: () => <MemoryConflictsCard findingIds={FINDING_IDS} onOpen={noop} />,
-};
-
-export const MemoryConflictsDismissed: Story = {
-  render: () => {
-    for (const id of FINDING_IDS) {
-      writeThreadFlag(STORY_RUN, dismissFlagKey('memory-conflicts', id), true);
-    }
-    return (
-      <ThreadUiMemoryContext.Provider value={STORY_RUN}>
-        <MemoryConflictsCard findingIds={FINDING_IDS} onOpen={noop} />
-      </ThreadUiMemoryContext.Provider>
-    );
-  },
+  render: () => (
+    <MemoryConflictsCard
+      findingIds={FINDING_IDS}
+      onOpen={noop}
+      onDismiss={noop}
+    />
+  ),
 };

@@ -6,47 +6,35 @@ import {
   KeyRound,
   Link2,
 } from 'lucide-react';
-import { useContext, useEffect } from 'react';
+import { useContext } from 'react';
 
 import type { CliDetection, ConfigProfile } from '../../shared/contracts';
 import { agentDisplayName, AgentIdentityContext } from '../agent-identity';
-import { type SignedOutAccount, signedOutAccountRows } from '../cli-sign-ins';
+import { accountLogins, type SignedOutAccount } from '../cli-sign-ins';
 import { AppUpdateActions } from '../components/app-update-actions';
 import { CliLoginProgress } from '../components/cli-login-progress';
 import { ErrorText } from '../components/error-text';
 import { SignInAction } from '../components/sign-in-action';
 import { Button } from '../components/ui/button';
 import type { DaemonApis } from '../daemon-api';
-import type { DaemonClient } from '../daemon-client';
-import { isRemoteRuntime } from '../remote/remote-session';
-import {
-  cliUpdatesAvailable,
-  useCliAttention,
-} from '../settings/use-cli-attention';
 import type { CliUpdatesController } from '../settings/use-cli-updates';
 import { updateStatusText } from '../updates/update-status';
-import {
-  type UpdateController,
-  useUpdateState,
-} from '../updates/use-update-state';
-import {
-  type CliLoginController,
-  isLoginOver,
-  useCliLogin,
-} from '../use-cli-login';
+import type { UpdateController } from '../updates/use-update-state';
+import { type CliLoginController, loginUnderWay } from '../use-cli-login';
 import { NoticeCard } from './notice-card';
 import {
+  appInstallFailed,
+  appUpdateUnsettled,
   appUpdateWaits,
   configDirName,
-  ON_SHARES,
-  readMemoryFindings,
-  readWaitingShares,
+  newestNoticeVersion,
   type ShareWait,
-  shareWaitsByPlace,
-  useCardDismissal,
-  useConfigProfiles,
+  shareWaitOf,
+  signInNoticeKey,
+  storedShareWait,
 } from './settings-attention';
-import { ON_MEMORY, useWaitingSet } from './use-waiting-items';
+import type { SettingsNoticeRowView } from './settings-notice-payload';
+import { SettingsNoticesContext } from './settings-notices-context';
 
 const SLOT = 'settings-attention';
 
@@ -90,18 +78,13 @@ export function AgentUpdatesCard({
   rows,
   updates,
   nameOf,
+  onDismiss,
 }: {
   rows: readonly CliDetection[];
   updates: CliUpdatesController;
   nameOf: (kind: string) => string;
+  onDismiss?: () => void;
 }): React.JSX.Element {
-  const dismissal = useCardDismissal(
-    'agent-updates',
-    rows.map(
-      (detection) =>
-        `${detection.kind}@${detection.update.latestVersion ?? ''}`,
-    ),
-  );
   return (
     <NoticeCard
       slot={SLOT}
@@ -109,7 +92,7 @@ export function AgentUpdatesCard({
       icon={CircleArrowUp}
       label="Update available"
       heading={plural(rows.length, 'agent', 'agents')}
-      dismissal={dismissal}>
+      onDismiss={onDismiss}>
       <Rows>
         {rows.map((detection) => {
           const running = updates.updating.has(detection.kind);
@@ -152,40 +135,43 @@ export function AgentSignInCard({
   login,
   nameOf,
   profiles,
+  onDismiss,
+  ownsLogin = true,
 }: {
   rows: readonly SignedOutAccount[];
   login: CliLoginController;
   nameOf: (kind: string) => string;
   profiles: readonly ConfigProfile[];
+  onDismiss?: () => void;
+  /** Whether the sign-in under way, or just ended, is this card's: only then is its progress drawn here. */
+  ownsLogin?: boolean;
 }): React.JSX.Element {
-  const dismissal = useCardDismissal(
-    'agent-sign-in',
-    rows.map((row) => `${row.kind}:${row.configDir ?? ''}`),
-  );
-  const busy =
-    login.starting !== null ||
-    (login.login !== null && !isLoginOver(login.login.session));
-  const dismissable =
-    rows.length > 0 && login.starting === null && login.login === null;
+  const busy = loginUnderWay(login);
+  const signingHere = ownsLogin && busy;
+  const signing = login.starting ?? login.login;
+  const accountName = (kind: string, configDir: string | null): string =>
+    configDir === null
+      ? nameOf(kind)
+      : `${nameOf(kind)} · ${configDirName(configDir, profiles)}`;
+  const heading =
+    rows.length === 0 && signingHere && signing !== null
+      ? accountName(signing.kind, signing.configDir)
+      : plural(rows.length, 'account', 'accounts');
   return (
     <NoticeCard
       slot={SLOT}
       kind="agent-sign-in"
       icon={KeyRound}
-      label="Sign-in needed"
-      heading={plural(rows.length, 'account', 'accounts')}
-      settled={rows.length === 0}
+      label={rows.length === 0 && signingHere ? 'Signing in' : 'Sign-in needed'}
+      heading={heading}
+      settled={rows.length === 0 && !signingHere}
       settledIcon={CircleCheck}
       settledLabel="Signed in"
-      dismissal={dismissable ? dismissal : undefined}>
+      onDismiss={rows.length > 0 && !signingHere ? onDismiss : undefined}>
       {rows.length === 0 ? null : (
         <Rows>
           {rows.map((row) => {
-            const name = nameOf(row.kind);
-            const text =
-              row.configDir === null
-                ? name
-                : `${name} · ${configDirName(row.configDir, profiles)}`;
+            const text = accountName(row.kind, row.configDir);
             const starting =
               login.starting?.kind === row.kind &&
               login.starting.server === null &&
@@ -211,7 +197,7 @@ export function AgentSignInCard({
           })}
         </Rows>
       )}
-      {login.login === null ? null : (
+      {login.login === null || !ownsLogin ? null : (
         <CliLoginProgress
           variant="inline"
           session={login.login.session}
@@ -228,16 +214,23 @@ export function AgentSignInCard({
 export function AppUpdateCard({
   update,
   remote,
+  offered = null,
+  onDismiss,
 }: {
   update: UpdateController;
   remote: boolean;
+  /** The version the notice offered, said while this launch does not know whether it still waits. */
+  offered?: string | null;
+  onDismiss?: () => void;
 }): React.JSX.Element | null {
   const state = update.state;
-  const dismissal = useCardDismissal(
-    'app-update',
-    state === null ? [] : [state.version ?? ''],
-  );
-  if (state === null) {
+  const text =
+    state !== null && (appUpdateWaits(state) || appInstallFailed(state))
+      ? updateStatusText(state)
+      : offered === null
+        ? null
+        : `Geniro ${offered} is available.`;
+  if (text === null) {
     return null;
   }
   return (
@@ -247,12 +240,12 @@ export function AppUpdateCard({
       icon={Download}
       label="Update available"
       heading="Geniro"
-      dismissal={dismissal}>
+      onDismiss={onDismiss}>
       <div className="flex min-w-0 items-center gap-3 [&>button]:shrink-0">
         <p
           data-slot="settings-attention-app-update"
           className="m-0 min-w-0 flex-1 text-sm break-words">
-          {updateStatusText(state)}
+          {text}
         </p>
         {remote ? null : <AppUpdateActions update={update} />}
       </div>
@@ -268,14 +261,15 @@ export function AppUpdateCard({
 export function ShareSignInCard({
   wait,
   api,
+  remote,
+  onDismiss,
 }: {
   wait: ShareWait;
   api: DaemonApis['shares'];
+  /** A paired device: the storage is signed in to on the Mac, so the card says so instead of offering it. */
+  remote: boolean;
+  onDismiss?: () => void;
 }): React.JSX.Element {
-  const dismissal = useCardDismissal(
-    `share-sign-in:${wait.destinationId}`,
-    wait.shareIds,
-  );
   return (
     <NoticeCard
       slot={SLOT}
@@ -283,19 +277,23 @@ export function ShareSignInCard({
       icon={Link2}
       label="Waiting for sign-in"
       heading={wait.label}
-      dismissal={dismissal}>
+      onDismiss={onDismiss}>
       <p
         data-slot="settings-attention-share-count"
         className="m-0 text-sm break-words">
         {plural(wait.count, 'shared link waits', 'shared links wait')} to be
-        uploaded. {wait.reason}.
+        uploaded.{wait.reason === null ? null : ` ${wait.reason}.`}
       </p>
-      <SignInAction
-        api={api}
-        destinationId={wait.destinationId}
-        label={wait.label}
-        className="self-start"
-      />
+      {remote ? (
+        <p className="m-0 text-xs text-muted-foreground">Sign in on the Mac.</p>
+      ) : (
+        <SignInAction
+          api={api}
+          destinationId={wait.destinationId}
+          label={wait.label}
+          className="self-start"
+        />
+      )}
     </NoticeCard>
   );
 }
@@ -303,12 +301,13 @@ export function ShareSignInCard({
 export function MemoryConflictsCard({
   findingIds,
   onOpen,
+  onDismiss,
 }: {
   findingIds: readonly string[];
   onOpen: (() => void) | null;
+  onDismiss?: () => void;
 }): React.JSX.Element {
   const count = findingIds.length;
-  const dismissal = useCardDismissal('memory-conflicts', findingIds);
   return (
     <NoticeCard
       slot={SLOT}
@@ -316,7 +315,7 @@ export function MemoryConflictsCard({
       icon={GitCompareArrows}
       label="Waiting for your decision"
       heading={plural(count, 'memory conflict', 'memory conflicts')}
-      dismissal={dismissal}>
+      onDismiss={onDismiss}>
       <p
         data-slot="settings-attention-conflicts"
         className="m-0 text-sm break-words">
@@ -344,100 +343,119 @@ export function MemoryConflictsCard({
 }
 
 /**
- * What waits on the user in Settings, drawn at the foot of the manager's chat
- * while it waits, from the same live readings Settings draws: agent updates,
- * signed-out agent accounts, a Geniro update, shares waiting on a sign-in and
- * memory conflicts. Nothing here is a transcript row, so a card goes once its
- * reason does, wherever it was settled.
+ * A Settings notice's row in the manager chat: the card Settings' own live
+ * readings draw for it while the notice stands and was not dismissed, nothing
+ * otherwise. While a live reading is not known (a check under way, an account
+ * not asked yet, shares a paired device cannot read) the card is drawn from what
+ * the notice holds. A sign-in under way keeps its card until it ends.
  */
-export function SettingsAttentionCards({
-  apis,
-  client,
-  active,
-  onOpenMemoryConflicts,
-  remote = isRemoteRuntime(),
+export function SettingsNoticeCard({
+  row,
 }: {
-  apis: DaemonApis;
-  client: DaemonClient | null;
-  active: boolean;
-  onOpenMemoryConflicts: (() => void) | null;
-  remote?: boolean;
+  row: SettingsNoticeRowView;
 }): React.JSX.Element | null {
+  const store = useContext(SettingsNoticesContext);
   const identities = useContext(AgentIdentityContext);
-  const nameOf = (kind: string): string => agentDisplayName(identities, kind);
-  const cli = useCliAttention();
-  const { refresh } = cli;
-  useEffect(() => {
-    if (active) {
-      refresh(false);
-    }
-  }, [active, refresh]);
-  const login = useCliLogin(apis, () => refresh(true));
-  const update = useUpdateState();
-  const profiles = useConfigProfiles();
-  const shares = useWaitingSet(
-    apis,
-    client,
-    active && !remote,
-    readWaitingShares,
-    ON_SHARES,
-  );
-  const findings = useWaitingSet(
-    apis,
-    client,
-    active,
-    readMemoryFindings,
-    ON_MEMORY,
-  );
-
-  const updateRows = cliUpdatesAvailable(cli.detections ?? []);
-  const signInRows = (cli.detections ?? []).flatMap(signedOutAccountRows);
-  const shareWaits =
-    shares.items === null ? [] : shareWaitsByPlace(shares.items.values());
-  const conflictIds = findings.items === null ? [] : [...findings.items.keys()];
-  const showSignIn = signInRows.length > 0 || login.login !== null;
-  const showAppUpdate = appUpdateWaits(update.state);
-
+  if (store === null) {
+    return null;
+  }
+  const notice = store.notices?.get(row.noticeId);
+  const signing = store.login.starting ?? store.login.login;
+  const ownsLogin =
+    row.kind === 'agent-sign-in' &&
+    signing !== null &&
+    signing.server === null &&
+    row.key === signInNoticeKey(signing);
+  const signingIn = ownsLogin && loginUnderWay(store.login);
   if (
-    updateRows.length === 0 &&
-    !showSignIn &&
-    !showAppUpdate &&
-    shareWaits.length === 0 &&
-    conflictIds.length === 0
+    notice === undefined ||
+    (!signingIn && (notice.resolvedAt !== null || notice.dismissedAt !== null))
   ) {
     return null;
   }
-  return (
-    <div data-slot={SLOT} className="flex min-w-0 flex-col gap-2.5">
-      {showAppUpdate ? <AppUpdateCard update={update} remote={remote} /> : null}
-      {updateRows.length === 0 ? null : (
+  const offered = newestNoticeVersion(notice.items);
+  const onDismiss = (): void => store.dismiss(row.noticeId);
+  const nameOf = (kind: string): string => agentDisplayName(identities, kind);
+  const detections = store.detections ?? [];
+  switch (row.kind) {
+    case 'app-update':
+      return appUpdateWaits(store.update.state) ||
+        appUpdateUnsettled(store.update.state) ? (
+        <AppUpdateCard
+          update={store.update}
+          remote={store.remote}
+          offered={offered}
+          onDismiss={onDismiss}
+        />
+      ) : null;
+    case 'agent-updates': {
+      const rows = detections
+        .filter(
+          (detection) =>
+            row.key === `agent-updates:${detection.kind}` &&
+            detection.found &&
+            detection.update.available !== false &&
+            (detection.update.available === true || offered !== null),
+        )
+        .map((detection) =>
+          offered === null
+            ? detection
+            : {
+                ...detection,
+                update: { ...detection.update, latestVersion: offered },
+              },
+        );
+      return rows.length === 0 ? null : (
         <AgentUpdatesCard
-          rows={updateRows}
-          updates={cli.updates}
+          rows={rows}
+          updates={store.cliUpdates}
           nameOf={nameOf}
+          onDismiss={onDismiss}
         />
-      )}
-      {showSignIn ? (
+      );
+    }
+    case 'agent-sign-in': {
+      const rows = detections
+        .flatMap(accountLogins)
+        .filter(
+          (account) =>
+            account.loggedIn !== true && row.key === signInNoticeKey(account),
+        )
+        .map(({ kind, configDir }) => ({ kind, configDir }));
+      return rows.length === 0 && !signingIn ? null : (
         <AgentSignInCard
-          rows={signInRows}
-          login={login}
+          rows={rows}
+          login={store.login}
           nameOf={nameOf}
-          profiles={profiles}
+          profiles={store.profiles}
+          ownsLogin={ownsLogin}
+          onDismiss={onDismiss}
         />
-      ) : null}
-      {shareWaits.map((wait) => (
+      );
+    }
+    case 'share-sign-in': {
+      const wait =
+        store.shareWaits === null
+          ? storedShareWait(notice)
+          : shareWaitOf(store.shareWaits, row.key);
+      return wait === null ? null : (
         <ShareSignInCard
-          key={wait.destinationId}
           wait={wait}
-          api={apis.shares}
+          api={store.apis.shares}
+          remote={store.remote}
+          onDismiss={onDismiss}
         />
-      ))}
-      {conflictIds.length === 0 ? null : (
+      );
+    }
+    case 'memory-conflicts': {
+      const findingIds = store.conflictIds ?? notice.items;
+      return findingIds.length === 0 ? null : (
         <MemoryConflictsCard
-          findingIds={conflictIds}
-          onOpen={onOpenMemoryConflicts}
+          findingIds={findingIds}
+          onOpen={store.onOpenMemoryConflicts}
+          onDismiss={onDismiss}
         />
-      )}
-    </div>
-  );
+      );
+    }
+  }
 }

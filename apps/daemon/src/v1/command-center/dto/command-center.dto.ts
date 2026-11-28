@@ -9,6 +9,10 @@ import {
   CommandCenterStartsSchema,
   CommandCenterThreadStartStateSchema,
   CommandCenterTimelineSchema,
+  DismissThreadDoneSchema,
+  SettingsNoticeReadingsSchema,
+  SettingsNoticeSchema,
+  SettingsNoticesSchema,
   START_FAILURE_MAX_CHARS,
   StartCommandCenterChatSchema,
   TIMELINE_LIMIT_DEFAULT,
@@ -112,4 +116,16 @@ export class StartThreadRunDto extends createZodDto(startThreadRunSchema) {}
 
 export class CommandCenterThreadStartStateDto extends createZodDto(
   CommandCenterThreadStartStateSchema,
+) {}
+
+export class SettingsNoticesDto extends createZodDto(SettingsNoticesSchema) {}
+
+export class SettingsNoticeDto extends createZodDto(SettingsNoticeSchema) {}
+
+export class SettingsNoticeReadingsDto extends createZodDto(
+  SettingsNoticeReadingsSchema,
+) {}
+
+export class DismissThreadDoneDto extends createZodDto(
+  DismissThreadDoneSchema,
 ) {}

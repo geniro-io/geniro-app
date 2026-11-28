@@ -150,6 +150,31 @@ afterEach(() => {
 });
 
 describe('useCliAttention', () => {
+  it('hands a reading one hook took to every other hook in the window, newest first', async () => {
+    let elsewhere: CliAttention | null = null;
+    function Elsewhere(): null {
+      elsewhere = useCliAttention();
+      return null;
+    }
+    detectClis.mockResolvedValue([det('claude', { loggedIn: false })]);
+    await act(async () => {
+      root.render(
+        <>
+          <Probe />
+          <Elsewhere />
+        </>,
+      );
+    });
+    expect(shown('sign-ins')).toBe('1');
+
+    detectClis.mockResolvedValue([det('claude', { loggedIn: true })]);
+    await act(async () => {
+      elsewhere!.refresh(true);
+    });
+
+    expect(shown('sign-ins')).toBe('0');
+  });
+
   it('counts the updates waiting from a cached detection', async () => {
     detectClis.mockResolvedValue([
       det('claude', { update: updateAvailable() }),

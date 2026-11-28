@@ -105,6 +105,7 @@ export async function memoryDb() {
     em,
     new MemoryDao(em),
     new MemoryReviewFindingDao(em),
+    events,
   );
   return {
     orm,

@@ -5,9 +5,12 @@ import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { LessonsModule } from '../lessons/lessons.module';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
+import { SharesModule } from '../shares/shares.module';
 import { TasksModule } from '../tasks/tasks.module';
 import { TeamsModule } from '../teams/teams.module';
 import { CommandCenterController } from './controllers/command-center.controller';
+import { CommandCenterDoneDismissalDao } from './dao/command-center-done-dismissal.dao';
+import { CommandCenterNoticeDao } from './dao/command-center-notice.dao';
 import { CommandCenterRosterDao } from './dao/command-center-roster.dao';
 import { CommandCenterThreadStartDao } from './dao/command-center-thread-start.dao';
 import { CommandCenterTimelineDao } from './dao/command-center-timeline.dao';
@@ -15,6 +18,7 @@ import { CommandCenterService } from './services/command-center.service';
 import { CommandCenterChatService } from './services/command-center-chat.service';
 import { CommandCenterEventBus } from './services/command-center-events.bus';
 import { CommandCenterEventsService } from './services/command-center-events.service';
+import { CommandCenterNoticesService } from './services/command-center-notices.service';
 import { CommandCenterNotifyService } from './services/command-center-notify.service';
 import { CommandCenterOpsService } from './services/command-center-ops.service';
 import { CommandCenterStartsService } from './services/command-center-starts.service';
@@ -42,9 +46,12 @@ import { ManagerAnnouncementsService } from './services/manager-announcements.se
     MemoryModule,
     LessonsModule,
     KnowledgeModule,
+    SharesModule,
   ],
   controllers: [CommandCenterController],
   providers: [
+    CommandCenterDoneDismissalDao,
+    CommandCenterNoticeDao,
     CommandCenterRosterDao,
     CommandCenterThreadStartDao,
     CommandCenterTimelineDao,
@@ -57,6 +64,7 @@ import { ManagerAnnouncementsService } from './services/manager-announcements.se
     CommandCenterNotifyService,
     CommandCenterTimelineService,
     CommandCenterWaitingService,
+    CommandCenterNoticesService,
     ManagerAnnouncementsService,
   ],
   exports: [CommandCenterEventBus],

@@ -4,6 +4,7 @@ import {
   CustomInstructionsSchema,
   RunProjectRefSchema,
   RunWireSchema,
+  SETTINGS_NOTICE_KINDS,
 } from '../agents/chat.types';
 import { TaskStatusSchema } from '../tasks/tasks.types';
 import { chatChipsSchema } from '../teams/teams.types';
@@ -246,6 +247,115 @@ export const CommandCenterTimelineSchema = z.object({
 });
 export type CommandCenterTimeline = z.infer<typeof CommandCenterTimelineSchema>;
 
+export const SettingsNoticeKindSchema = z
+  .enum(SETTINGS_NOTICE_KINDS)
+  .meta({ id: 'SettingsNoticeKind' });
+
+/** The kinds whose readings live in Electron main, reported by the desktop window. */
+export const REPORTED_NOTICE_KINDS = [
+  'app-update',
+  'agent-updates',
+  'agent-sign-in',
+] as const satisfies readonly (typeof SETTINGS_NOTICE_KINDS)[number][];
+export type ReportedNoticeKind = (typeof REPORTED_NOTICE_KINDS)[number];
+
+export const NOTICE_ITEMS_MAX = 200;
+export const NOTICE_ITEM_MAX_CHARS = 500;
+
+export const SettingsNoticeSchema = z
+  .object({
+    id: z.string(),
+    kind: SettingsNoticeKindSchema,
+    key: z
+      .string()
+      .describe(
+        'What the notice is about: its kind, or `share-sign-in:<destination id>`',
+      ),
+    items: z
+      .array(z.string())
+      .describe(
+        'What waits now, as last read — a version, `<cli>@<version>`, `<cli>:<config dir>`, a share id or a memory finding id; a dismissed notice keeps what it showed',
+      ),
+    label: z
+      .string()
+      .nullable()
+      .describe(
+        "What a `share-sign-in` notice's storage is called, as its Sign in button names it; null for every other kind",
+      ),
+    openedAt: z.string().describe('When it was first read, ISO 8601'),
+    resolvedAt: z
+      .string()
+      .nullable()
+      .describe('When its reason went, ISO 8601; null while it stands'),
+    dismissedAt: z
+      .string()
+      .nullable()
+      .describe('When the user dismissed it, ISO 8601; null when not'),
+  })
+  .meta({ id: 'SettingsNotice' });
+export type SettingsNotice = z.infer<typeof SettingsNoticeSchema>;
+
+export const ThreadDoneDismissalSchema = z
+  .object({
+    runId: z.string().describe('The thread whose Done cards were dismissed'),
+    throughSeq: z
+      .number()
+      .int()
+      .describe(
+        'The manager chat seq of the newest Done row dismissed; every Done row of the thread at or below it draws nothing',
+      ),
+  })
+  .meta({ id: 'ThreadDoneDismissal' });
+export type ThreadDoneDismissal = z.infer<typeof ThreadDoneDismissalSchema>;
+
+// No `.meta({ id })` — a RESPONSE DTO ROOT.
+export const SettingsNoticesSchema = z.object({
+  notices: z.array(SettingsNoticeSchema),
+  doneDismissals: z
+    .array(ThreadDoneDismissalSchema)
+    .describe("How far each thread's Done cards were dismissed"),
+});
+export type SettingsNotices = z.infer<typeof SettingsNoticesSchema>;
+
+export const DismissThreadDoneSchema = z
+  .object({
+    seq: z
+      .number()
+      .int()
+      .min(1)
+      .describe('The manager chat seq of the Done row whose card is dismissed'),
+  })
+  .meta({ id: 'DismissThreadDone' });
+
+/**
+ * What the desktop window reads now for the kinds Electron main holds: a kind
+ * listed with no items has nothing waiting, a kind left out was not read, and
+ * an unsettled item is one whose answer is not known right now.
+ */
+export const SettingsNoticeReadingsSchema = z
+  .object({
+    readings: z
+      .array(
+        z.object({
+          kind: z.enum(REPORTED_NOTICE_KINDS),
+          items: z
+            .array(z.string().min(1).max(NOTICE_ITEM_MAX_CHARS))
+            .max(NOTICE_ITEMS_MAX),
+          unsettled: z
+            .array(z.string().min(1).max(NOTICE_ITEM_MAX_CHARS))
+            .max(NOTICE_ITEMS_MAX)
+            .describe(
+              'Items not known right now (a check under way or failed, an account not asked yet): their notices stay as they are',
+            ),
+        }),
+      )
+      .max(REPORTED_NOTICE_KINDS.length),
+  })
+  .meta({ id: 'SettingsNoticeReadings' });
+export type SettingsNoticeReadings = z.infer<
+  typeof SettingsNoticeReadingsSchema
+>;
+
 /** Why the roster holds a thread. */
 export const RosterReasonSchema = z.enum(['auto', 'manager', 'user']);
 export type RosterReason = z.infer<typeof RosterReasonSchema>;
@@ -256,7 +366,8 @@ export type RosterReason = z.infer<typeof RosterReasonSchema>;
  */
 export interface CommandCenterChangedEvent {
   runIds: string[];
-  reason: 'status' | 'items' | 'roster' | 'task' | 'refiled' | 'start';
+  reason:
+    'status' | 'items' | 'roster' | 'task' | 'refiled' | 'start' | 'notices';
 }
 
 /**

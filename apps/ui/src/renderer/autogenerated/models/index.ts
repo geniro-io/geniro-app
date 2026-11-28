@@ -5755,6 +5755,19 @@ export interface DigestThreadFailedToolsInner {
 /**
  * 
  * @export
+ * @interface DismissThreadDoneDto
+ */
+export interface DismissThreadDoneDto {
+    /**
+     * The manager chat seq of the Done row whose card is dismissed
+     * @type {number}
+     * @memberof DismissThreadDoneDto
+     */
+    seq: number;
+}
+/**
+ * 
+ * @export
  * @interface DisplayedPullRequest
  */
 export interface DisplayedPullRequest {
@@ -17264,6 +17277,146 @@ export interface SetTeamRunPoolMemberDto {
 /**
  * 
  * @export
+ * @interface SettingsNotice
+ */
+export interface SettingsNotice {
+    /**
+     * 
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    id: string;
+    /**
+     * 
+     * @type {SettingsNoticeKind}
+     * @memberof SettingsNotice
+     */
+    kind: SettingsNoticeKind;
+    /**
+     * What the notice is about: its kind, or `share-sign-in:<destination id>`
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    key: string;
+    /**
+     * What waits now, as last read — a version, `<cli>@<version>`, `<cli>:<config dir>`, a share id or a memory finding id; a dismissed notice keeps what it showed
+     * @type {Array<string>}
+     * @memberof SettingsNotice
+     */
+    items: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    label: string | null;
+    /**
+     * When it was first read, ISO 8601
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    openedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    resolvedAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    dismissedAt: string | null;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const SettingsNoticeKind = {
+    AppUpdate: 'app-update',
+    AgentUpdates: 'agent-updates',
+    AgentSignIn: 'agent-sign-in',
+    ShareSignIn: 'share-sign-in',
+    MemoryConflicts: 'memory-conflicts'
+} as const;
+export type SettingsNoticeKind = typeof SettingsNoticeKind[keyof typeof SettingsNoticeKind];
+
+/**
+ * 
+ * @export
+ * @interface SettingsNoticeReadingsDto
+ */
+export interface SettingsNoticeReadingsDto {
+    /**
+     * 
+     * @type {Array<SettingsNoticeReadingsDtoReadingsInner>}
+     * @memberof SettingsNoticeReadingsDto
+     */
+    readings: Array<SettingsNoticeReadingsDtoReadingsInner>;
+}
+/**
+ * 
+ * @export
+ * @interface SettingsNoticeReadingsDtoReadingsInner
+ */
+export interface SettingsNoticeReadingsDtoReadingsInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof SettingsNoticeReadingsDtoReadingsInner
+     */
+    kind: SettingsNoticeReadingsDtoReadingsInnerKindEnum;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof SettingsNoticeReadingsDtoReadingsInner
+     */
+    items: Array<string>;
+    /**
+     * Items not known right now (a check under way or failed, an account not asked yet): their notices stay as they are
+     * @type {Array<string>}
+     * @memberof SettingsNoticeReadingsDtoReadingsInner
+     */
+    unsettled: Array<string>;
+}
+
+
+/**
+ * @export
+ */
+export const SettingsNoticeReadingsDtoReadingsInnerKindEnum = {
+    AppUpdate: 'app-update',
+    AgentUpdates: 'agent-updates',
+    AgentSignIn: 'agent-sign-in'
+} as const;
+export type SettingsNoticeReadingsDtoReadingsInnerKindEnum = typeof SettingsNoticeReadingsDtoReadingsInnerKindEnum[keyof typeof SettingsNoticeReadingsDtoReadingsInnerKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface SettingsNoticesDto
+ */
+export interface SettingsNoticesDto {
+    /**
+     * 
+     * @type {Array<SettingsNotice>}
+     * @memberof SettingsNoticesDto
+     */
+    notices: Array<SettingsNotice>;
+    /**
+     * How far each thread's Done cards were dismissed
+     * @type {Array<ThreadDoneDismissal>}
+     * @memberof SettingsNoticesDto
+     */
+    doneDismissals: Array<ThreadDoneDismissal>;
+}
+/**
+ * 
+ * @export
  * @interface Share
  */
 export interface Share {
@@ -21263,6 +21416,25 @@ export interface ThreadAnalysisDto {
      * @memberof ThreadAnalysisDto
      */
     analysis: ThreadOverviewDtoAnalysisAnalysis | null;
+}
+/**
+ * 
+ * @export
+ * @interface ThreadDoneDismissal
+ */
+export interface ThreadDoneDismissal {
+    /**
+     * The thread whose Done cards were dismissed
+     * @type {string}
+     * @memberof ThreadDoneDismissal
+     */
+    runId: string;
+    /**
+     * The manager chat seq of the newest Done row dismissed; every Done row of the thread at or below it draws nothing
+     * @type {number}
+     * @memberof ThreadDoneDismissal
+     */
+    throughSeq: number;
 }
 /**
  * 

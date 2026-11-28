@@ -47,6 +47,28 @@ export function signInsNeededText(count: number): string {
     : `${count} accounts need sign-in`;
 }
 
+type CliReadingListener = (
+  request: number,
+  detections: readonly CliDetection[],
+) => void;
+
+/**
+ * Every reading of the CLIs this window takes reaches every hook, newest by
+ * request: a sign-in finished in one place is seen by the counts and by the
+ * notice report elsewhere without waiting for their own next read.
+ */
+const cliReadingListeners = new Set<CliReadingListener>();
+let cliReadingRequests = 0;
+
+function publishCliReading(
+  request: number,
+  detections: readonly CliDetection[],
+): void {
+  for (const listener of cliReadingListeners) {
+    listener(request, detections);
+  }
+}
+
 export function useCliAttention(): CliAttention {
   const [readings, setReadings] = useState<{
     updatesAvailable: number;
@@ -58,7 +80,6 @@ export function useCliAttention(): CliAttention {
     detections: null,
   });
   const live = useRef(true);
-  const requested = useRef(0);
   const shown = useRef(0);
 
   const show = useLatestCallback(
@@ -76,37 +97,34 @@ export function useCliAttention(): CliAttention {
     [],
   );
 
-  const adopt = useLatestCallback(
-    (detections: CliDetection[]): void => {
-      show(++requested.current, detections);
-    },
-    [show],
-  );
+  const adopt = useLatestCallback((detections: CliDetection[]): void => {
+    publishCliReading(++cliReadingRequests, detections);
+  }, []);
 
-  const read = useLatestCallback(
-    (fresh: boolean): void => {
-      const request = ++requested.current;
-      void window.geniro
-        .detectClis(fresh ? undefined : { maxAgeMs: DETECTION_MAX_AGE_MS })
-        .then((detections) => {
-          if (live.current) {
-            show(request, detections);
-          }
-        })
-        .catch(() => undefined);
-    },
-    [show],
-  );
+  const read = useLatestCallback((fresh: boolean): void => {
+    const request = ++cliReadingRequests;
+    void window.geniro
+      .detectClis(fresh ? undefined : { maxAgeMs: DETECTION_MAX_AGE_MS })
+      .then((detections) => publishCliReading(request, detections))
+      .catch(() => undefined);
+  }, []);
 
   const updates = useCliUpdates(() => read(true));
 
   useEffect(() => {
     live.current = true;
+    const listener: CliReadingListener = (request, detections) => {
+      if (live.current) {
+        show(request, detections);
+      }
+    };
+    cliReadingListeners.add(listener);
     read(false);
     const onFocus = (): void => read(false);
     window.addEventListener('focus', onFocus);
     return () => {
       live.current = false;
+      cliReadingListeners.delete(listener);
       window.removeEventListener('focus', onFocus);
     };
   }, []);

@@ -12,13 +12,14 @@ import type { ThreadIdentity } from '../components/thread-head';
 import {
   type ThreadArchived,
   ThreadArchivedContext,
+  type ThreadDoneDismissals,
+  ThreadDoneDismissalsContext,
   ThreadDoneNewestContext,
   ThreadReportsContext,
 } from './thread-done-context';
 import { ThreadEventCard, ThreadEventRow } from './thread-event-card';
 import type { ThreadMessageRow } from './thread-message-payload';
 import { ThreadIdentityContext, ThreadOpenContext } from './thread-title';
-import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -559,19 +560,23 @@ describe("ThreadEventCard — a finished thread drawn as the graph's card", () =
 
   it('puts the time it finished and its actions in a foot, Archive worded with its icon', () => {
     const el = render(
-      <ThreadArchiveContext.Provider value={() => vi.fn()}>
-        <ThreadOpenContext.Provider value={vi.fn()}>
-          <ThreadIdentityContext.Provider value={IDENTITIES}>
-            <ThreadEventCard
-              kind="done"
-              runId="r-pelican"
-              title="Pelican"
-              text="Merged."
-              at="2026-11-26T09:00:00Z"
-            />
-          </ThreadIdentityContext.Provider>
-        </ThreadOpenContext.Provider>
-      </ThreadArchiveContext.Provider>,
+      <ThreadDoneDismissalsContext.Provider
+        value={{ through: new Map(), dismiss: vi.fn() }}>
+        <ThreadArchiveContext.Provider value={() => vi.fn()}>
+          <ThreadOpenContext.Provider value={vi.fn()}>
+            <ThreadIdentityContext.Provider value={IDENTITIES}>
+              <ThreadEventCard
+                kind="done"
+                runId="r-pelican"
+                title="Pelican"
+                text="Merged."
+                at="2026-11-26T09:00:00Z"
+                seq={9}
+              />
+            </ThreadIdentityContext.Provider>
+          </ThreadOpenContext.Provider>
+        </ThreadArchiveContext.Provider>
+      </ThreadDoneDismissalsContext.Provider>,
     );
     const foot = el.querySelector<HTMLElement>(
       '[data-slot="thread-event-foot"]',
@@ -765,47 +770,91 @@ describe('ThreadEventCard — archive', () => {
       ).toContain('Frozen summary');
     });
 
-    it('collapses to one line on Dismiss and comes back on Show, still offering Open chat and Archive', () => {
-      const opened: string[] = [];
-      const archive = vi.fn();
-      const el = render(
-        <ThreadArchiveContext.Provider value={() => archive}>
-          <ThreadOpenContext.Provider value={(runId) => opened.push(runId)}>
-            <ThreadEventCard
-              kind="done"
-              runId="r-otter"
-              title="Otter"
-              text="Frozen summary"
-            />
-          </ThreadOpenContext.Provider>
-        </ThreadArchiveContext.Provider>,
+    function Dismissable({
+      initial = new Map(),
+      seq,
+      newest,
+      onDismiss = () => undefined,
+    }: {
+      initial?: ReadonlyMap<string, number>;
+      seq: number;
+      newest: ReadonlyMap<string, number>;
+      onDismiss?: (runId: string, seq: number) => void;
+    }): React.ReactElement {
+      const [through, setThrough] = useState(initial);
+      const dismissals: ThreadDoneDismissals = {
+        through,
+        dismiss: (runId, dismissedSeq) => {
+          onDismiss(runId, dismissedSeq);
+          setThrough(new Map(through).set(runId, dismissedSeq));
+        },
+      };
+      return (
+        <ThreadDoneDismissalsContext.Provider value={dismissals}>
+          <ThreadDoneNewestContext.Provider value={newest}>
+            <ThreadEventRow row={DONE_ROW('r-otter', 'Finished')} seq={seq} />
+          </ThreadDoneNewestContext.Provider>
+        </ThreadDoneDismissalsContext.Provider>
       );
-      expect(
-        el.querySelector('[data-slot="thread-event-open"]'),
-      ).not.toBeNull();
-      expect(
-        el.querySelector('[data-slot="thread-event-archive"]'),
-      ).not.toBeNull();
+    }
+
+    it('removes the card on Dismiss, handing the daemon its thread and row, with no fold left behind', () => {
+      const dismissed: [string, number][] = [];
+      const el = render(
+        <Dismissable
+          seq={9}
+          newest={new Map([['r-otter', 9]])}
+          onDismiss={(runId, seq) => dismissed.push([runId, seq])}
+        />,
+      );
       expect(
         el
           .querySelector('[data-slot="thread-event-dismiss"]')
           ?.getAttribute('title'),
-      ).toBe('Hide this card');
+      ).toBe(
+        "Remove this card on every device; the thread's next finish brings a new one",
+      );
 
       press(el, 'thread-event-dismiss');
-      expect(
-        el.querySelector('[data-slot="thread-event-dismissed"]')?.textContent,
-      ).toBe('Otterfinished');
-      expect(el.querySelector('[data-slot="thread-event-text"]')).toBeNull();
-      expect(el.querySelector('[data-slot="thread-event-open"]')).toBeNull();
 
-      press(el, 'thread-event-show');
+      expect(dismissed).toEqual([['r-otter', 9]]);
+      expect(el.querySelector('[data-slot="thread-event-card"]')).toBeNull();
       expect(
         el.querySelector('[data-slot="thread-event-dismissed"]'),
       ).toBeNull();
+    });
+
+    it('draws nothing for a card the daemon says was dismissed, on any device', () => {
+      const el = render(
+        <Dismissable
+          initial={new Map([['r-otter', 9]])}
+          seq={9}
+          newest={new Map([['r-otter', 9]])}
+        />,
+      );
+      expect(el.querySelector('[data-slot="thread-event-card"]')).toBeNull();
+    });
+
+    it("draws the thread's next finish as a new card after its last one was dismissed", () => {
+      const el = render(
+        <Dismissable
+          initial={new Map([['r-otter', 9]])}
+          seq={14}
+          newest={new Map([['r-otter', 14]])}
+        />,
+      );
+      expect(card(el).dataset.run).toBe('r-otter');
       expect(
-        el.querySelector('[data-slot="thread-event-text"]')?.textContent,
-      ).toContain('Frozen summary');
+        el.querySelector('[data-slot="thread-event-dismiss"]'),
+      ).not.toBeNull();
+    });
+
+    it('offers no Dismiss where no dismissal is kept, outside the manager chat', () => {
+      const el = render(
+        <ThreadEventRow row={DONE_ROW('r-otter', 'Finished')} seq={9} />,
+      );
+      expect(card(el).dataset.run).toBe('r-otter');
+      expect(el.querySelector('[data-slot="thread-event-dismiss"]')).toBeNull();
     });
 
     it('offers Dismiss on a finished thread only', () => {
@@ -902,40 +951,5 @@ describe('ThreadEventCard — archived Done card', () => {
   it('does not dim a thread the map has not read yet', () => {
     const el = render(drawDone(new Map(), vi.fn()));
     expect(el.querySelector('[data-slot="thread-event-archived"]')).toBeNull();
-  });
-});
-
-describe('ThreadEventCard — Dismiss under thread memory', () => {
-  it('stays dismissed after the card remounts inside the same thread', () => {
-    localStorage.clear();
-    const tree = (
-      <ThreadUiMemoryContext.Provider value="manager-run">
-        <ThreadEventCard kind="done" runId="r-otter" title="Otter" />
-      </ThreadUiMemoryContext.Provider>
-    );
-    const first = render(tree);
-    act(() =>
-      first
-        .querySelector<HTMLButtonElement>('[data-slot="thread-event-dismiss"]')!
-        .click(),
-    );
-    expect(
-      first.querySelector('[data-slot="thread-event-dismissed"]'),
-    ).not.toBeNull();
-
-    const second = render(tree);
-    expect(
-      second.querySelector('[data-slot="thread-event-dismissed"]'),
-    ).not.toBeNull();
-
-    const otherThread = render(
-      <ThreadUiMemoryContext.Provider value="another-run">
-        <ThreadEventCard kind="done" runId="r-otter" title="Otter" />
-      </ThreadUiMemoryContext.Provider>,
-    );
-    expect(
-      otherThread.querySelector('[data-slot="thread-event-dismissed"]'),
-    ).toBeNull();
-    localStorage.clear();
   });
 });

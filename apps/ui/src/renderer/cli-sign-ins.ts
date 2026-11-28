@@ -12,25 +12,35 @@ export function signedOutConfigurations(detection: CliDetection): number {
   ).length;
 }
 
+export interface AccountLogin extends SignedOutAccount {
+  /** What the CLI answered for it; null when that is not known. */
+  loggedIn: boolean | null;
+}
+
+/** Every account of an installed CLI with its sign-in answer: its default, then each named configuration. */
+export function accountLogins(detection: CliDetection): AccountLogin[] {
+  if (!detection.found) {
+    return [];
+  }
+  return [
+    { kind: detection.kind, configDir: null, loggedIn: detection.loggedIn },
+    ...Object.entries(detection.profileLogins ?? {}).map(
+      ([configDir, loggedIn]) => ({
+        kind: detection.kind,
+        configDir,
+        loggedIn,
+      }),
+    ),
+  ];
+}
+
 /** Every account an installed CLI said is signed out: its default, then each named configuration. */
 export function signedOutAccountRows(
   detection: CliDetection,
 ): SignedOutAccount[] {
-  if (!detection.found) {
-    return [];
-  }
-  const rows: SignedOutAccount[] =
-    detection.loggedIn === false
-      ? [{ kind: detection.kind, configDir: null }]
-      : [];
-  for (const [configDir, loggedIn] of Object.entries(
-    detection.profileLogins ?? {},
-  )) {
-    if (loggedIn === false) {
-      rows.push({ kind: detection.kind, configDir });
-    }
-  }
-  return rows;
+  return accountLogins(detection)
+    .filter(({ loggedIn }) => loggedIn === false)
+    .map(({ kind, configDir }) => ({ kind, configDir }));
 }
 
 export function signedOutAccounts(detection: CliDetection): number {

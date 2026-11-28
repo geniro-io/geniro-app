@@ -9,6 +9,7 @@ import { WhatsNewDialog } from './changelog/whats-new-dialog';
 import { Chats } from './chats/Chats';
 import { REMOTE_HISTORY_PAGE } from './chats/use-chat-run';
 import { useNextWaitingShortcut } from './chats/use-next-waiting-shortcut';
+import { useNoticeReadingsReport } from './chats/use-notice-readings-report';
 import {
   nextWaiting,
   owedCount,
@@ -653,6 +654,13 @@ export function App(): React.JSX.Element {
   }, []);
   const memoryWaiting = useMemoryWaitingCount(apis, clientRef.current);
   const cliAttention = useCliAttention();
+  useNoticeReadingsReport({
+    apis,
+    client: clientRef.current,
+    detections: cliAttention.detections,
+    update: update.state,
+    remote: isRemoteRuntime(),
+  });
   const agentName = useLatestCallback(
     (kind: string): string => agentShortName(agentIdentities, kind),
     [agentIdentities],

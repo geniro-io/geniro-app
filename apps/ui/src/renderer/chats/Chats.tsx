@@ -344,7 +344,7 @@ import {
   SESSION_SEARCH_CONCURRENCY,
   sessionProfiles,
 } from './session-search';
-import { SettingsAttentionCards } from './settings-attention-cards';
+import { SettingsNoticesScope } from './settings-notices-scope';
 import { settleMomentOf } from './settled-status';
 import { groupRunningShells, type ShellRun, shellRuns } from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
@@ -5017,6 +5017,17 @@ export function Chats({
     [threadDoneNewest],
   );
   const threadArchived = useThreadArchived(apis, client, doneRunIds);
+  const managerNotices = hosted?.managerNotices;
+  const threadDoneDismissals = useMemo(
+    () =>
+      managerChat && managerNotices !== undefined
+        ? {
+            through: managerNotices.doneDismissedThrough,
+            dismiss: managerNotices.dismissDone,
+          }
+        : null,
+    [managerChat, managerNotices],
+  );
   const waitingItems = useWaitingItems(
     apis,
     client,
@@ -11004,6 +11015,7 @@ export function Chats({
                         }
                         threadIdentities={hosted?.threadIdentities}
                         threadDoneNewest={threadDoneNewest}
+                        threadDoneDismissals={threadDoneDismissals}
                         rowsShownOnCards={shownOnCards}
                         threadArchived={threadArchived}
                         threadReports={hosted?.threadReports ?? null}
@@ -11016,247 +11028,246 @@ export function Chats({
                         revealCallBlock={revealCallBlock}
                         revealCall={revealCall}
                         openSubagentDetail={openSubagentDetail}>
-                        <div
-                          data-slot="transcript"
-                          className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none] [&>*:first-child]:mt-auto">
-                          {/* A chat opens on its newest 1,000 items, so a long one
+                        <SettingsNoticesScope
+                          enabled={managerChat}
+                          apis={apis}
+                          client={client}
+                          active={active}
+                          manager={hosted?.managerNotices ?? null}
+                          onOpenMemoryConflicts={
+                            hosted?.onOpenMemoryConflicts ?? null
+                          }>
+                          <div
+                            data-slot="transcript"
+                            className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none] [&>*:first-child]:mt-auto">
+                            {/* A chat opens on its newest 1,000 items, so a long one
                     begins part-way through itself. SAID, rather than left as a
                     conversation that appears to start mid-sentence — and it is
                     the top row precisely because that is where a reader who has
                     scrolled this far is looking. */}
-                          {/* A BUTTON as well as a caption: scrolling is the only
+                            {/* A BUTTON as well as a caption: scrolling is the only
                     other trigger, and a transcript that does not overflow its
                     pane has no scroll to give. REPORTED as "it cannot load
                     messages" over a team whose newest page folded into ONE
                     call card — "Scroll up" above nothing to scroll. */}
-                          {threadOpening ? (
-                            <div
-                              data-slot="thread-loading"
-                              role="status"
-                              className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-                              <Spinner />
-                              Loading conversation…
-                            </div>
-                          ) : null}
-                          {hosted !== null &&
-                          !threadOpening &&
-                          transcriptEntries.length === 0 ? (
-                            <p
-                              data-slot="hosted-thread-empty"
-                              className="m-0 text-sm text-muted-foreground">
-                              {hosted.emptyText}
-                            </p>
-                          ) : null}
-                          {hasOlder && !threadOpening ? (
-                            <OlderMessagesControl
-                              slot="older-messages"
-                              className="justify-center"
-                              loading={loadingOlder}
-                              onLoad={() => {
-                                const scroller =
-                                  transcriptEndRef.current?.parentElement;
-                                if (scroller) {
-                                  void pageOlderUntilVisible(scroller);
-                                }
-                              }}
-                            />
-                          ) : null}
-                          {transcriptEntries.map((entry) => {
-                            const key = transcriptEntryKey(entry);
-                            const startSeq = entryStartSeq(entry);
-                            // The seq ANCHOR, which is what makes a search
-                            // hit reachable: `revealSeq` finds the last
-                            // anchor at or below the hit's seq and scrolls
-                            // to it. Here rather than inside
-                            // `TranscriptEntryView`, because that component
-                            // returns a different root per entry kind and
-                            // this is the one place they are all one list.
-                            //
-                            // `empty:hidden` is load-bearing twice over. An
-                            // entry CAN render nothing (`TranscriptItem`
-                            // answers null for ten kinds), and an empty flex
-                            // child would still consume the container's
-                            // `gap-2.5` — a stray 10px wherever one of those
-                            // rows falls. It is also exactly the condition
-                            // `revealSeq`'s `:not(:empty)` filters on, so
-                            // what is skipped and what is invisible cannot
-                            // drift apart.
-                            const wrap = (
-                              children: React.ReactNode,
-                            ): React.JSX.Element => (
-                              <TranscriptRow
-                                key={key}
-                                // `flex flex-col` is LOAD-BEARING, not
-                                // decoration: `align-self` resolves only
-                                // against a flex parent, and a bare
-                                // `MessageBubble` relies on it — the
-                                // `note` variant is `self-center`, which
-                                // is how the `✓ done · 21s` row at the
-                                // end of every turn is centred. As a plain
-                                // block wrapper this displaced every one
-                                // of them left; a one-child flex column
-                                // hands the alignment back untouched.
-                                // `display: contents` would too, and is
-                                // wrong — it generates no box, so the mark
-                                // below would not paint and `revealSeq`
-                                // would have nothing to measure.
-                                //
-                                // The landing mark is a WASH, and it was a
-                                // ring first — reported as not liked, and
-                                // the reason is visible the moment a user
-                                // message is the hit: this wrapper spans
-                                // the transcript's whole width while a
-                                // bubble is `self-end`, so an OUTLINE
-                                // draws a box around the empty half and
-                                // reads as a stray rectangle rather than
-                                // as "this row". A fill reads as the row
-                                // either way, which is also why the mark
-                                // stays on the wrapper rather than moving
-                                // onto the bubble: a tool group, a card
-                                // and a `note` are not bubbles and have no
-                                // one element to tint.
-                                //
-                                // The ring was chosen because it is a
-                                // box-shadow and costs no layout, and that
-                                // reasoning was right about padding and
-                                // wrong about the conclusion: `-my-1 py-1`
-                                // is net ZERO — the padding grows the
-                                // painted box, the negative margin takes
-                                // the same amount back off the margin box
-                                // flex actually lays out — so the wash
-                                // breathes without moving a single
-                                // neighbouring row. Both are in the marked
-                                // arm, so an unmarked row is untouched.
-                                // Only the colour transitions; the
-                                // geometry is instant, which is the right
-                                // way round for a flash.
-                                className={cn(
-                                  mark?.key === `entry:${startSeq}` &&
-                                    JUMP_MARK_CLASS,
-                                )}
-                                {...jumpAnchorProps(
-                                  'transcript',
-                                  startSeq,
-                                  `entry:${startSeq}`,
-                                )}>
-                                {children}
-                              </TranscriptRow>
-                            );
-                            if (
-                              entry.type !== 'item' ||
-                              entry.item.kind !== 'approval_request'
-                            ) {
-                              return wrap(
-                                <TranscriptEntryView
-                                  entry={entry}
-                                  nodes={nodeMeta}
-                                  chatAgentName={activeRun?.agentKind ?? null}
-                                  soloAgent={soloAgent}
-                                  soloNodeId={
-                                    wfNodes.relay ? null : wfNodes.rootId
-                                  }
-                                />,
-                              );
-                            }
-                            const item = entry.item;
-                            // EVERY open request's card lives above the composer, so
-                            // every one of them leaves a marker here. Keyed on openness
-                            // rather than on the pinned id: keying on the pin gave the
-                            // SECOND open question a fully live card in the scroller,
-                            // which is the failure the pin exists to end. Leaving the
-                            // live card here too would put two sets of buttons over one
-                            // one-shot verdict channel; leaving nothing would silently
-                            // drop a row out of the conversation's order.
-                            if (openRequestId(item) !== null) {
-                              return wrap(
-                                <MessageBubble variant="note">
-                                  {pinnedRequest?.id === item.id
-                                    ? '❓ waiting on your answer — the card is pinned below'
-                                    : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                                </MessageBubble>,
-                              );
-                            }
-                            const askerName =
-                              (item.memberId
-                                ? (nodeMeta.get(item.memberId)?.name ??
-                                  item.memberId)
-                                : activeRun?.agentKind) ?? 'agent';
-                            const card = (
-                              <div className="w-full">
-                                {approvalCardFor(item)}
+                            {threadOpening ? (
+                              <div
+                                data-slot="thread-loading"
+                                role="status"
+                                className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+                                <Spinner />
+                                Loading conversation…
                               </div>
-                            );
-                            // A solo agent's card needs no identity frame either.
-                            return wrap(
-                              soloAgent ? (
-                                card
-                              ) : (
-                                <SenderRow
-                                  name={askerName}
-                                  colorKey={item.memberId ?? undefined}
-                                  time={formatClockTime(item.createdAt)}>
-                                  {card}
-                                </SenderRow>
-                              ),
-                            );
-                          })}
-                          {managerChat && !threadOpening ? (
-                            <SettingsAttentionCards
-                              apis={apis}
-                              client={client}
-                              active={active}
-                              onOpenMemoryConflicts={
-                                hosted?.onOpenMemoryConflicts ?? null
-                              }
-                            />
-                          ) : null}
-                          <div ref={transcriptEndRef} />
-                        </div>
-                        {activeRun === null ? null : (
-                          <div className="pointer-events-none relative h-0 w-full overflow-visible">
-                            <div
-                              data-slot="transcript-corner"
-                              className="pointer-events-auto absolute right-4 -bottom-2 flex items-end gap-2">
-                              {hosted?.workingThreads === undefined ||
-                              hosted.workingThreads.length === 0 ? null : (
-                                <WorkingThreadsCard
-                                  threads={hosted.workingThreads}
-                                  onOpenThread={hosted.onOpenThread}
-                                />
-                              )}
-                              <WorkingAgentsCard
-                                key={activeRun.id}
-                                rows={startedAgents}
-                                runId={activeRun.id}
-                                api={chatApi}
-                                client={client}
-                                onShowInChat={openCall}
-                                nodes={nodeMeta}
-                                chatAgentName={activeRun.agentKind}
-                                delegateState={runState}
-                                collapseToolSteps={collapseToolSteps}
-                                work={startedAgentsWork}
+                            ) : null}
+                            {hosted !== null &&
+                            !threadOpening &&
+                            transcriptEntries.length === 0 ? (
+                              <p
+                                data-slot="hosted-thread-empty"
+                                className="m-0 text-sm text-muted-foreground">
+                                {hosted.emptyText}
+                              </p>
+                            ) : null}
+                            {hasOlder && !threadOpening ? (
+                              <OlderMessagesControl
+                                slot="older-messages"
+                                className="justify-center"
+                                loading={loadingOlder}
+                                onLoad={() => {
+                                  const scroller =
+                                    transcriptEndRef.current?.parentElement;
+                                  if (scroller) {
+                                    void pageOlderUntilVisible(scroller);
+                                  }
+                                }}
                               />
-                            </div>
+                            ) : null}
+                            {transcriptEntries.map((entry) => {
+                              const key = transcriptEntryKey(entry);
+                              const startSeq = entryStartSeq(entry);
+                              // The seq ANCHOR, which is what makes a search
+                              // hit reachable: `revealSeq` finds the last
+                              // anchor at or below the hit's seq and scrolls
+                              // to it. Here rather than inside
+                              // `TranscriptEntryView`, because that component
+                              // returns a different root per entry kind and
+                              // this is the one place they are all one list.
+                              //
+                              // `empty:hidden` is load-bearing twice over. An
+                              // entry CAN render nothing (`TranscriptItem`
+                              // answers null for ten kinds), and an empty flex
+                              // child would still consume the container's
+                              // `gap-2.5` — a stray 10px wherever one of those
+                              // rows falls. It is also exactly the condition
+                              // `revealSeq`'s `:not(:empty)` filters on, so
+                              // what is skipped and what is invisible cannot
+                              // drift apart.
+                              const wrap = (
+                                children: React.ReactNode,
+                              ): React.JSX.Element => (
+                                <TranscriptRow
+                                  key={key}
+                                  // `flex flex-col` is LOAD-BEARING, not
+                                  // decoration: `align-self` resolves only
+                                  // against a flex parent, and a bare
+                                  // `MessageBubble` relies on it — the
+                                  // `note` variant is `self-center`, which
+                                  // is how the `✓ done · 21s` row at the
+                                  // end of every turn is centred. As a plain
+                                  // block wrapper this displaced every one
+                                  // of them left; a one-child flex column
+                                  // hands the alignment back untouched.
+                                  // `display: contents` would too, and is
+                                  // wrong — it generates no box, so the mark
+                                  // below would not paint and `revealSeq`
+                                  // would have nothing to measure.
+                                  //
+                                  // The landing mark is a WASH, and it was a
+                                  // ring first — reported as not liked, and
+                                  // the reason is visible the moment a user
+                                  // message is the hit: this wrapper spans
+                                  // the transcript's whole width while a
+                                  // bubble is `self-end`, so an OUTLINE
+                                  // draws a box around the empty half and
+                                  // reads as a stray rectangle rather than
+                                  // as "this row". A fill reads as the row
+                                  // either way, which is also why the mark
+                                  // stays on the wrapper rather than moving
+                                  // onto the bubble: a tool group, a card
+                                  // and a `note` are not bubbles and have no
+                                  // one element to tint.
+                                  //
+                                  // The ring was chosen because it is a
+                                  // box-shadow and costs no layout, and that
+                                  // reasoning was right about padding and
+                                  // wrong about the conclusion: `-my-1 py-1`
+                                  // is net ZERO — the padding grows the
+                                  // painted box, the negative margin takes
+                                  // the same amount back off the margin box
+                                  // flex actually lays out — so the wash
+                                  // breathes without moving a single
+                                  // neighbouring row. Both are in the marked
+                                  // arm, so an unmarked row is untouched.
+                                  // Only the colour transitions; the
+                                  // geometry is instant, which is the right
+                                  // way round for a flash.
+                                  className={cn(
+                                    mark?.key === `entry:${startSeq}` &&
+                                      JUMP_MARK_CLASS,
+                                  )}
+                                  {...jumpAnchorProps(
+                                    'transcript',
+                                    startSeq,
+                                    `entry:${startSeq}`,
+                                  )}>
+                                  {children}
+                                </TranscriptRow>
+                              );
+                              if (
+                                entry.type !== 'item' ||
+                                entry.item.kind !== 'approval_request'
+                              ) {
+                                return wrap(
+                                  <TranscriptEntryView
+                                    entry={entry}
+                                    nodes={nodeMeta}
+                                    chatAgentName={activeRun?.agentKind ?? null}
+                                    soloAgent={soloAgent}
+                                    soloNodeId={
+                                      wfNodes.relay ? null : wfNodes.rootId
+                                    }
+                                  />,
+                                );
+                              }
+                              const item = entry.item;
+                              // EVERY open request's card lives above the composer, so
+                              // every one of them leaves a marker here. Keyed on openness
+                              // rather than on the pinned id: keying on the pin gave the
+                              // SECOND open question a fully live card in the scroller,
+                              // which is the failure the pin exists to end. Leaving the
+                              // live card here too would put two sets of buttons over one
+                              // one-shot verdict channel; leaving nothing would silently
+                              // drop a row out of the conversation's order.
+                              if (openRequestId(item) !== null) {
+                                return wrap(
+                                  <MessageBubble variant="note">
+                                    {pinnedRequest?.id === item.id
+                                      ? '❓ waiting on your answer — the card is pinned below'
+                                      : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                                  </MessageBubble>,
+                                );
+                              }
+                              const askerName =
+                                (item.memberId
+                                  ? (nodeMeta.get(item.memberId)?.name ??
+                                    item.memberId)
+                                  : activeRun?.agentKind) ?? 'agent';
+                              const card = (
+                                <div className="w-full">
+                                  {approvalCardFor(item)}
+                                </div>
+                              );
+                              // A solo agent's card needs no identity frame either.
+                              return wrap(
+                                soloAgent ? (
+                                  card
+                                ) : (
+                                  <SenderRow
+                                    name={askerName}
+                                    colorKey={item.memberId ?? undefined}
+                                    time={formatClockTime(item.createdAt)}>
+                                    {card}
+                                  </SenderRow>
+                                ),
+                              );
+                            })}
+                            <div ref={transcriptEndRef} />
                           </div>
-                        )}
+                          {activeRun === null ? null : (
+                            <div className="pointer-events-none relative h-0 w-full overflow-visible">
+                              <div
+                                data-slot="transcript-corner"
+                                className="pointer-events-auto absolute right-4 -bottom-2 flex items-end gap-2">
+                                {hosted?.workingThreads === undefined ||
+                                hosted.workingThreads.length === 0 ? null : (
+                                  <WorkingThreadsCard
+                                    threads={hosted.workingThreads}
+                                    onOpenThread={hosted.onOpenThread}
+                                  />
+                                )}
+                                <WorkingAgentsCard
+                                  key={activeRun.id}
+                                  rows={startedAgents}
+                                  runId={activeRun.id}
+                                  api={chatApi}
+                                  client={client}
+                                  onShowInChat={openCall}
+                                  nodes={nodeMeta}
+                                  chatAgentName={activeRun.agentKind}
+                                  delegateState={runState}
+                                  collapseToolSteps={collapseToolSteps}
+                                  work={startedAgentsWork}
+                                />
+                              </div>
+                            </div>
+                          )}
 
-                        {/* Between the scroller and the composer, and drawn OVER
+                          {/* Between the scroller and the composer, and drawn OVER
                   the transcript from a zero-height row — see
                   `jump-to-latest.tsx` for why it cannot take part in the
                   column's sizing. */}
-                        {/* Offered whenever the newest message is not what is on
+                          {/* Offered whenever the newest message is not what is on
                     screen, which is TWO states rather than one. `aboveTail` is
                     the scroll position; `awayFromTail` is a window fetched
                     around a search hit, whose own bottom is somewhere in the
                     middle of the conversation — there the button is the only way
                     back, and it has to FETCH rather than scroll. */}
-                        <JumpToLatest
-                          visible={aboveTail || awayFromTail}
-                          onJump={awayFromTail ? backToTail : jumpToLatest}
-                        />
+                          <JumpToLatest
+                            visible={aboveTail || awayFromTail}
+                            onJump={awayFromTail ? backToTail : jumpToLatest}
+                          />
 
-                        {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
+                          {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
                   still belongs to the scrolled content, so it can be scrolled
                   past and it overlaps the messages it floats above. Here the
                   card is a sibling of the transcript and the composer, which
@@ -11266,13 +11277,14 @@ export function Chats({
                   It sits ABOVE the composer because that is where the answer
                   gets typed — the question and the reply belong on the same
                   edge of the screen. */}
-                        {pinnedRequest ? (
-                          <PinnedRequests
-                            requests={openRequests}
-                            pinnedId={pinnedRequest.id}
-                            renderCard={approvalCardFor}
-                          />
-                        ) : null}
+                          {pinnedRequest ? (
+                            <PinnedRequests
+                              requests={openRequests}
+                              pinnedId={pinnedRequest.id}
+                              renderCard={approvalCardFor}
+                            />
+                          ) : null}
+                        </SettingsNoticesScope>
                       </TranscriptContexts>
 
                       {transcriptError ? (

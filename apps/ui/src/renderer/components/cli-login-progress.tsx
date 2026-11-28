@@ -169,8 +169,10 @@ export function CliLoginProgress({
           />
         )}
         <span
+          data-slot="cli-login-progress-title"
+          title={band ? undefined : title}
           className={cn(
-            'shrink-0 whitespace-nowrap',
+            band ? 'shrink-0 whitespace-nowrap' : 'min-w-0 truncate',
             session.status === 'succeeded'
               ? 'text-foreground'
               : 'text-muted-foreground',

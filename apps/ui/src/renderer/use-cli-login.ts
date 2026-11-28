@@ -124,6 +124,16 @@ export function isLoginOver(session: LoginSessionDto): boolean {
   );
 }
 
+/** Whether a sign-in is being started or still runs; a finished panel waiting for Dismiss is not one. */
+export function loginUnderWay(
+  controller: Pick<CliLoginController, 'login' | 'starting'>,
+): boolean {
+  return (
+    controller.starting !== null ||
+    (controller.login !== null && !isLoginOver(controller.login.session))
+  );
+}
+
 /**
  * The sign-in the daemon answered 404 about, as the FAILED session it now is —
  * or null for any other failure, which may clear on the next tick.
